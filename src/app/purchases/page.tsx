@@ -176,6 +176,10 @@ export default function PurchasesPage() {
           if (data.error) { setOcrError(data.error); setOcrStep('confirm'); setOcrLoading(false); return }
           combinedRaw += (data.raw_text ?? '') + '\n'
           allItems.push(...(data.items ?? []))
+          if (data.supplier && !ocrSupplier) {
+            const matched = suppliers.find(s => s.name.includes(data.supplier) || data.supplier.includes(s.name))
+            if (matched) setOcrSupplier(matched.id)
+          }
         }
       } else {
         setOcrLoadingMsg('AI読み取り中...')
@@ -186,6 +190,10 @@ export default function PurchasesPage() {
         if (data.error) { setOcrError(data.error); setOcrStep('confirm'); setOcrLoading(false); return }
         combinedRaw = data.raw_text ?? ''
         allItems.push(...(data.items ?? []))
+        if (data.supplier) {
+          const matched = suppliers.find(s => s.name.includes(data.supplier) || data.supplier.includes(s.name))
+          if (matched) setOcrSupplier(matched.id)
+        }
       }
 
       setOcrRaw(combinedRaw.trim())

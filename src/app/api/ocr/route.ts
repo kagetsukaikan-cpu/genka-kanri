@@ -17,18 +17,22 @@ export async function POST(request: NextRequest) {
   const mediaType = file.type.startsWith('image/') ? file.type : 'image/jpeg'
 
   const prompt = `この画像は日本の納品書または請求書です。
-画像から仕入れ品目の情報を読み取り、以下のJSON配列形式で返してください。
+画像から以下の情報を読み取り、JSON形式で返してください。
 
-[{"name": "品名", "quantity": 数量, "unit": "単位", "price": 金額}]
+{
+  "supplier": "仕入れ先・取引先・会社名（見つからない場合はnull）",
+  "items": [{"name": "品名", "quantity": 数量, "unit": "単位", "price": 金額}]
+}
 
 ルール：
+- supplierは納品書の発行元（会社名・店舗名・農家名など）
 - 品目行のみ抽出（ヘッダー行・合計行・税額行は除外）
 - quantityは数字のみ（例: 2）
 - unitは単位（個/kg/g/本/尾/枚/袋/パック/束/缶/瓶/箱/ケース など）
 - priceは単価または金額（円単位の整数）
 - JSONのみ返す。説明文は不要
 
-読み取れる品目がない場合は空配列 [] を返す。`
+読み取れる品目がない場合はitemsを空配列にする。`
 
   const res = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
@@ -62,14 +66,20 @@ export async function POST(request: NextRequest) {
   const text: string = result.content?.[0]?.text ?? ''
 
   let items: Array<{ name: string; quantity: number; unit: string; price: number }> = []
+  let supplier: string | null = null
   try {
-    const jsonMatch = text.match(/\[[\s\S]*\]/)
+    const jsonMatch = text.match(/\{[\s\S]*\}/)
     if (jsonMatch) {
-      items = JSON.parse(jsonMatch[0])
+      const parsed = JSON.parse(jsonMatch[0])
+      items = parsed.items ?? []
+      supplier = parsed.supplier ?? null
+    } else {
+      const arrayMatch = text.match(/\[[\s\S]*\]/)
+      if (arrayMatch) items = JSON.parse(arrayMatch[0])
     }
   } catch {
     items = []
   }
 
-  return NextResponse.json({ raw_text: text, items })
+  return NextResponse.json({ raw_text: text, items, supplier })
 }
