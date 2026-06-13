@@ -144,6 +144,62 @@ export default function PurchasesPage() {
     if (!ocrFile) return
     setOcrLoading(true)
     setOcrError('')
+
+    const isPdf = ocrFile.type === 'application/pdf' || ocrFile.name.toLowerCase().endsWith('.pdf')
+
+    if (isPdf) {
+      try {
+        const pdfjsLib = await import('pdfjs-dist')
+        pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`
+
+        const arrayBuffer = await ocrFile.arrayBuffer()
+        const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise
+        const numPages = Math.min(pdf.numPages, 5)
+
+        let combinedRaw = ''
+        const allItems: OcrItem[] = []
+
+        for (let pageNum = 1; pageNum <= numPages; pageNum++) {
+          const page = await pdf.getPage(pageNum)
+          const viewport = page.getViewport({ scale: 2.0 })
+          const canvas = document.createElement('canvas')
+          canvas.width = viewport.width
+          canvas.height = viewport.height
+          await page.render({ canvasContext: canvas.getContext('2d')!, viewport }).promise
+
+          const blob = await new Promise<Blob>(resolve => canvas.toBlob(b => resolve(b!), 'image/jpeg', 0.95))
+          const fd = new FormData()
+          fd.append('file', new File([blob], `page-${pageNum}.jpg`, { type: 'image/jpeg' }))
+          const res = await fetch('/api/ocr', { method: 'POST', body: fd })
+          const data = await res.json()
+
+          if (data.error) {
+            setOcrError(data.error)
+            setOcrStep('confirm')
+            setOcrLoading(false)
+            return
+          }
+          combinedRaw += (data.raw_text ?? '') + '\n'
+          allItems.push(...(data.items ?? []))
+        }
+
+        setOcrRaw(combinedRaw.trim())
+        setOcrItems(allItems.map(item => ({
+          ...item,
+          ingredient_id: ingredients.find(i => i.name.includes(item.name) || item.name.includes(i.name))?.id ?? '',
+        })))
+        setOcrStep('confirm')
+        setOcrLoading(false)
+        return
+      } catch (e) {
+        setOcrError(`PDFの読み取りに失敗しました: ${String(e)}`)
+        setOcrStep('confirm')
+        setOcrLoading(false)
+        return
+      }
+    }
+
+    // 画像ファイルの場合
     const fd = new FormData()
     fd.append('file', ocrFile)
     const res = await fetch('/api/ocr', { method: 'POST', body: fd })
