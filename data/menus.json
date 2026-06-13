@@ -1,0 +1,11 @@
+[
+  {
+    "id": "4f4b3921-1f7e-4051-b6fb-6b45e78b29cd",
+    "created_at": "2026-06-12T13:42:51.476Z",
+    "updated_at": "2026-06-12T13:42:51.476Z",
+    "name": "海鮮丼",
+    "category": "御膳",
+    "selling_price": 3700,
+    "target_cost_rate": 30
+  }
+]
