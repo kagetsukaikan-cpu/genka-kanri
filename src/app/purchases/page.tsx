@@ -86,6 +86,7 @@ export default function PurchasesPage() {
   // OCR関連
   const [ocrFile, setOcrFile] = useState<File | null>(null)
   const [ocrLoading, setOcrLoading] = useState(false)
+  const [ocrLoadingMsg, setOcrLoadingMsg] = useState('AI読み取り中...')
   const [ocrItems, setOcrItems] = useState<OcrItem[]>([])
   const [ocrRaw, setOcrRaw] = useState('')
   const [ocrError, setOcrError] = useState('')
@@ -144,79 +145,97 @@ export default function PurchasesPage() {
     if (!ocrFile) return
     setOcrLoading(true)
     setOcrError('')
+    setOcrLoadingMsg('OCRエンジンを準備中...')
 
-    const isPdf = ocrFile.type === 'application/pdf' || ocrFile.name.toLowerCase().endsWith('.pdf')
+    try {
+      const { createWorker } = await import('tesseract.js')
+      const worker = await createWorker('jpn+eng')
 
-    if (isPdf) {
-      try {
+      let combinedRaw = ''
+      const allItems: OcrItem[] = []
+      const isPdf = ocrFile.type === 'application/pdf' || ocrFile.name.toLowerCase().endsWith('.pdf')
+
+      if (isPdf) {
         const pdfjsLib = await import('pdfjs-dist')
         pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`
-
         const arrayBuffer = await ocrFile.arrayBuffer()
         const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise
         const numPages = Math.min(pdf.numPages, 5)
 
-        let combinedRaw = ''
-        const allItems: OcrItem[] = []
-
         for (let pageNum = 1; pageNum <= numPages; pageNum++) {
+          setOcrLoadingMsg(`読み取り中... (${pageNum}/${numPages}ページ)`)
           const page = await pdf.getPage(pageNum)
           const viewport = page.getViewport({ scale: 2.0 })
           const canvas = document.createElement('canvas')
           canvas.width = viewport.width
           canvas.height = viewport.height
           await page.render({ canvasContext: canvas.getContext('2d')!, viewport }).promise
-
-          const blob = await new Promise<Blob>(resolve => canvas.toBlob(b => resolve(b!), 'image/jpeg', 0.95))
-          const fd = new FormData()
-          fd.append('file', new File([blob], `page-${pageNum}.jpg`, { type: 'image/jpeg' }))
-          const res = await fetch('/api/ocr', { method: 'POST', body: fd })
-          const data = await res.json()
-
-          if (data.error) {
-            setOcrError(data.error)
-            setOcrStep('confirm')
-            setOcrLoading(false)
-            return
-          }
-          combinedRaw += (data.raw_text ?? '') + '\n'
-          allItems.push(...(data.items ?? []))
+          const { data: { text } } = await worker.recognize(canvas)
+          combinedRaw += text + '\n'
+          allItems.push(...parseInvoiceText(text))
         }
-
-        setOcrRaw(combinedRaw.trim())
-        setOcrItems(allItems.map(item => ({
-          ...item,
-          ingredient_id: ingredients.find(i => i.name.includes(item.name) || item.name.includes(i.name))?.id ?? '',
-        })))
-        setOcrStep('confirm')
-        setOcrLoading(false)
-        return
-      } catch (e) {
-        setOcrError(`PDFの読み取りに失敗しました: ${String(e)}`)
-        setOcrStep('confirm')
-        setOcrLoading(false)
-        return
+      } else {
+        setOcrLoadingMsg('画像を読み取り中...')
+        const { data: { text } } = await worker.recognize(ocrFile)
+        combinedRaw = text
+        allItems.push(...parseInvoiceText(text))
       }
-    }
 
-    // 画像ファイルの場合
-    const fd = new FormData()
-    fd.append('file', ocrFile)
-    const res = await fetch('/api/ocr', { method: 'POST', body: fd })
-    const data = await res.json()
-    if (data.error) {
-      setOcrError(data.error)
-      setOcrRaw('')
-      setOcrItems([])
-    } else {
-      setOcrRaw(data.raw_text ?? '')
-      setOcrItems((data.items ?? []).map((item: OcrItem) => ({
+      await worker.terminate()
+      setOcrRaw(combinedRaw.trim())
+      setOcrItems(allItems.map(item => ({
         ...item,
         ingredient_id: ingredients.find(i => i.name.includes(item.name) || item.name.includes(i.name))?.id ?? '',
       })))
+    } catch (e) {
+      setOcrError(`OCR読み取りに失敗しました: ${String(e)}`)
     }
+
     setOcrStep('confirm')
     setOcrLoading(false)
+  }
+
+  function parseInvoiceText(text: string): OcrItem[] {
+    const items: OcrItem[] = []
+    const lines = text.split('\n').map(l => l.trim()).filter(Boolean)
+    const skipWords = ['品名', '商品名', '数量', '単位', '単価', '金額', '合計', '小計', '税', '備考', '納品書', '請求書', '御中', '様']
+    const unitPattern = /kg|g|cc|ml|個|枚|本|袋|パック|尾|冊|束|串|缶|瓶|箱|ケース/
+
+    for (const line of lines) {
+      if (skipWords.some(w => line.includes(w) && line.length < 15)) continue
+      if (!/[぀-ヿ一-鿿]/.test(line)) continue
+      if (!/\d/.test(line)) continue
+
+      const p1 = line.match(/^([぀-ヿ一-鿿\w・＆&\s]+?)\s+(\d+(?:\.\d+)?)\s*(kg|g|cc|ml|個|枚|本|袋|パック|尾|冊|束|串|缶|瓶|箱|ケース)?\s/)
+      if (p1) {
+        const name = p1[1].trim()
+        const quantity = parseFloat(p1[2])
+        const unit = p1[3] ?? '個'
+        const allNums = line.match(/[\d,]+/g) ?? []
+        const price = allNums.length > 0 ? parseInt(allNums[allNums.length - 1].replace(/,/g, ''), 10) : 0
+        if (name.length >= 2 && !isNaN(quantity) && price >= 100) {
+          items.push({ name, quantity, unit, price })
+          continue
+        }
+      }
+
+      const p2 = line.match(/^([぀-ヿ一-鿿\w・＆&\s]+?)\s+[\¥￥]?([\d,]+)円?/)
+      if (p2) {
+        const name = p2[1].trim()
+        const price = parseInt(p2[2].replace(/,/g, ''), 10)
+        const unitMatch = line.match(unitPattern)
+        const quantityMatch = line.match(/(\d+(?:\.\d+)?)\s*(kg|g|cc|ml|個|枚|本|袋|パック|尾|冊|束|串|缶|瓶|箱|ケース)/)
+        if (name.length >= 2 && price >= 100) {
+          items.push({
+            name,
+            quantity: quantityMatch ? parseFloat(quantityMatch[1]) : 1,
+            unit: unitMatch ? unitMatch[0] : '個',
+            price,
+          })
+        }
+      }
+    }
+    return items
   }
 
   const handleOcrSave = async () => {
@@ -485,7 +504,7 @@ export default function PurchasesPage() {
                   onChange={e => setOcrFile(e.target.files?.[0] ?? null)} />
                 <button disabled={!ocrFile || ocrLoading} onClick={handleOcrUpload}
                   className="w-full bg-green-600 text-white text-sm py-2.5 rounded-lg hover:bg-green-700 disabled:opacity-50 transition-colors">
-                  {ocrLoading ? 'AI読み取り中...' : '読み取り開始'}
+                  {ocrLoading ? ocrLoadingMsg : '読み取り開始'}
                 </button>
               </div>
             ) : (
