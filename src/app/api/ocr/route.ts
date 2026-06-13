@@ -87,20 +87,46 @@ function parseInvoiceText(text: string) {
   const items: Array<{ name: string; quantity: number; unit: string; price: number }> = []
   const lines = text.split('\n').map(l => l.trim()).filter(Boolean)
 
-  // 数量・単位・金額のパターン
-  // 例: "鮪　500g　3,250円" or "サーモン 1kg ¥2,800"
-  const linePattern = /^(.+?)\s+(\d+(?:\.\d+)?)\s*(kg|g|cc|ml|個|枚|本|袋|パック|尾|冊)?\s*[×x]?\s*[\¥￥]?([\d,]+)/i
+  const skipWords = ['品名', '商品名', '数量', '単位', '単価', '金額', '合計', '小計', '税', '備考', '納品書', '請求書', '御中', '様']
+  const unitPattern = /kg|g|cc|ml|個|枚|本|袋|パック|尾|冊|束|串|缶|瓶|箱|ケース/
 
   for (const line of lines) {
-    const m = line.match(linePattern)
-    if (m) {
-      const name = m[1].trim()
-      const quantity = parseFloat(m[2])
-      const unit = m[3] ?? '個'
-      const price = parseInt(m[4].replace(/,/g, ''), 10)
+    // ヘッダー行・日本語のない行・数字のない行はスキップ
+    if (skipWords.some(w => line.includes(w) && line.length < 15)) continue
+    if (!/[぀-ヿ一-鿿]/.test(line)) continue
+    if (!/\d/.test(line)) continue
 
-      if (name.length >= 2 && !isNaN(quantity) && !isNaN(price) && price > 0) {
+    // パターン1: 品名 数量 単位 単価 金額（テーブル形式）
+    const p1 = line.match(/^([぀-ヿ一-鿿\w・＆&\s]+?)\s+(\d+(?:\.\d+)?)\s*(kg|g|cc|ml|個|枚|本|袋|パック|尾|冊|束|串|缶|瓶|箱|ケース)?\s/)
+    if (p1) {
+      const name = p1[1].trim()
+      const quantity = parseFloat(p1[2])
+      const unit = p1[3] ?? '個'
+      // 行の最後の数字を金額として取得
+      const allNums = line.match(/[\d,]+/g) ?? []
+      const price = allNums.length > 0 ? parseInt(allNums[allNums.length - 1].replace(/,/g, ''), 10) : 0
+
+      if (name.length >= 2 && !isNaN(quantity) && price >= 100) {
         items.push({ name, quantity, unit, price })
+        continue
+      }
+    }
+
+    // パターン2: 品名 ¥金額 or 品名 金額円
+    const p2 = line.match(/^([぀-ヿ一-鿿\w・＆&\s]+?)\s+[\¥￥]?([\d,]+)円?/)
+    if (p2) {
+      const name = p2[1].trim()
+      const price = parseInt(p2[2].replace(/,/g, ''), 10)
+      const unitMatch = line.match(unitPattern)
+      const quantityMatch = line.match(/(\d+(?:\.\d+)?)\s*(kg|g|cc|ml|個|枚|本|袋|パック|尾|冊|束|串|缶|瓶|箱|ケース)/)
+
+      if (name.length >= 2 && price >= 100) {
+        items.push({
+          name,
+          quantity: quantityMatch ? parseFloat(quantityMatch[1]) : 1,
+          unit: unitMatch ? unitMatch[0] : '個',
+          price,
+        })
       }
     }
   }

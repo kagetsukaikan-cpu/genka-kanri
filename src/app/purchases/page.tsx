@@ -466,7 +466,18 @@ export default function PurchasesPage() {
                   ))}
                 </div>
                 {ocrItems.length === 0 && (
-                  <div className="text-center py-4 text-sm text-gray-400">品目が読み取れませんでした。</div>
+                  <div className="py-4 space-y-3">
+                    <div className="text-center text-sm text-gray-400">品目が自動で読み取れませんでした。</div>
+                    {ocrRaw && (
+                      <details className="text-xs">
+                        <summary className="cursor-pointer text-blue-500 text-center">OCR読み取りテキストを確認する</summary>
+                        <pre className="mt-2 p-3 bg-gray-50 rounded text-gray-600 whitespace-pre-wrap break-all max-h-48 overflow-auto">{ocrRaw}</pre>
+                      </details>
+                    )}
+                    {!ocrRaw && (
+                      <div className="text-center text-xs text-red-400">テキストが読み取れませんでした。PDFの画質を確認してください。</div>
+                    )}
+                  </div>
                 )}
               </div>
             )}
