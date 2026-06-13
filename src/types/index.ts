@@ -98,4 +98,6 @@ export interface OcrItem {
   quantity: number
   unit: string
   price: number
+  category?: string
+  ingredient_id?: string
 }

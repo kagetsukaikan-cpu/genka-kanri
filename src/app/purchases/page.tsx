@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback } from 'react'
 import { Plus, Upload, Trash2, X, CheckCircle, AlertCircle, FileSpreadsheet } from 'lucide-react'
-import type { PurchaseHistory, Supplier, Ingredient, OcrItem } from '@/types'
+import type { PurchaseHistory, Supplier, Ingredient, OcrItem, IngredientCategory } from '@/types'
 
 const emptyForm = {
   purchase_date: new Date().toISOString().split('T')[0],
@@ -79,6 +79,7 @@ export default function PurchasesPage() {
   const [purchases, setPurchases] = useState<PurchaseHistory[]>([])
   const [suppliers, setSuppliers] = useState<Supplier[]>([])
   const [ingredients, setIngredients] = useState<Ingredient[]>([])
+  const [categories, setCategories] = useState<IngredientCategory[]>([])
   const [showForm, setShowForm] = useState(false)
   const [form, setForm] = useState(emptyForm)
   const [saving, setSaving] = useState(false)
@@ -91,6 +92,7 @@ export default function PurchasesPage() {
   const [ocrRaw, setOcrRaw] = useState('')
   const [ocrError, setOcrError] = useState('')
   const [ocrSupplier, setOcrSupplier] = useState('')
+  const [ocrSupplierName, setOcrSupplierName] = useState('')
   const [ocrDate, setOcrDate] = useState(new Date().toISOString().split('T')[0])
   const [ocrStep, setOcrStep] = useState<'upload' | 'confirm'>('upload')
   const [showOcr, setShowOcr] = useState(false)
@@ -102,14 +104,16 @@ export default function PurchasesPage() {
   const [csvError, setCsvError] = useState('')
 
   const load = useCallback(async () => {
-    const [p, s, i] = await Promise.all([
+    const [p, s, i, c] = await Promise.all([
       fetch('/api/purchases').then(r => r.json()),
       fetch('/api/suppliers').then(r => r.json()),
       fetch('/api/ingredients').then(r => r.json()),
+      fetch('/api/categories').then(r => r.json()),
     ])
     setPurchases(Array.isArray(p) ? p : [])
     setSuppliers(Array.isArray(s) ? s : [])
     setIngredients(Array.isArray(i) ? i : [])
+    setCategories(Array.isArray(c) ? c : [])
   }, [])
 
   useEffect(() => { load() }, [load])
@@ -176,10 +180,12 @@ export default function PurchasesPage() {
           if (data.error) { setOcrError(data.error); setOcrStep('confirm'); setOcrLoading(false); return }
           combinedRaw += (data.raw_text ?? '') + '\n'
           allItems.push(...(data.items ?? []))
-          if (data.supplier && !ocrSupplier) {
+          if (data.supplier) {
+            setOcrSupplierName(data.supplier)
             const matched = suppliers.find(s => s.name.includes(data.supplier) || data.supplier.includes(s.name))
             if (matched) setOcrSupplier(matched.id)
           }
+          if (data.date) setOcrDate(data.date)
         }
       } else {
         setOcrLoadingMsg('AI読み取り中...')
@@ -191,9 +197,11 @@ export default function PurchasesPage() {
         combinedRaw = data.raw_text ?? ''
         allItems.push(...(data.items ?? []))
         if (data.supplier) {
+          setOcrSupplierName(data.supplier)
           const matched = suppliers.find(s => s.name.includes(data.supplier) || data.supplier.includes(s.name))
           if (matched) setOcrSupplier(matched.id)
         }
+        if (data.date) setOcrDate(data.date)
       }
 
       setOcrRaw(combinedRaw.trim())
@@ -254,29 +262,86 @@ export default function PurchasesPage() {
 
   const handleOcrSave = async () => {
     setSaving(true)
-    const supplier = suppliers.find(s => s.id === ocrSupplier)
+
+    // 1. 仕入先の確認・自動作成
+    let supplierId = ocrSupplier
+    if (!supplierId && ocrSupplierName) {
+      const matched = suppliers.find(s => s.name.includes(ocrSupplierName) || ocrSupplierName.includes(s.name))
+      if (matched) {
+        supplierId = matched.id
+      } else {
+        const res = await fetch('/api/suppliers', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: ocrSupplierName }),
+        })
+        if (res.ok) { const s = await res.json(); supplierId = s.id }
+      }
+    }
+
+    // 2. 各品目：食材の確認・自動作成→仕入履歴登録→価格更新
     for (const item of ocrItems) {
-      const ing = ingredients.find(i => i.id === (item as OcrItem & { ingredient_id?: string }).ingredient_id)
+      // 食材マスタで検索
+      let ingredient = ingredients.find(i => i.id === item.ingredient_id)
+        ?? ingredients.find(i => i.name === item.name || i.name.includes(item.name) || item.name.includes(i.name))
+
+      if (!ingredient) {
+        // カテゴリID取得
+        const cat = categories.find(c => c.name === (item.category ?? 'その他')) ?? categories.find(c => c.name === 'その他')
+        const res = await fetch('/api/ingredients', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: item.name,
+            unit: item.unit,
+            category_id: cat?.id ?? null,
+            supplier_id: supplierId || null,
+            purchase_price: item.price,
+            purchase_quantity: item.quantity,
+          }),
+        })
+        if (res.ok) ingredient = await res.json()
+      }
+
+      const unitPrice = item.quantity > 0 ? item.price / item.quantity : item.price
+
+      // 仕入履歴登録
       await fetch('/api/purchases', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           purchase_date: ocrDate,
-          supplier_id: supplier?.id ?? null,
-          ingredient_id: ing?.id ?? null,
+          supplier_id: supplierId || null,
+          ingredient_id: ingredient?.id ?? null,
           ingredient_name: item.name,
           quantity: item.quantity,
           unit: item.unit,
           price: item.price,
+          unit_price: unitPrice,
           ocr_raw_text: ocrRaw,
         }),
       })
+
+      // 食材マスタの価格を最新に更新
+      if (ingredient?.id) {
+        await fetch(`/api/ingredients/${ingredient.id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            purchase_price: item.price,
+            purchase_quantity: item.quantity,
+            supplier_id: supplierId || ingredient.supplier_id || null,
+          }),
+        })
+      }
     }
+
     setSaving(false)
     setShowOcr(false)
     setOcrStep('upload')
     setOcrFile(null)
     setOcrItems([])
+    setOcrSupplierName('')
     load()
   }
 

@@ -17,22 +17,31 @@ export async function POST(request: NextRequest) {
   const mediaType = file.type.startsWith('image/') ? file.type : 'image/jpeg'
 
   const prompt = `この画像は日本の納品書または請求書です。
-画像から以下の情報を読み取り、JSON形式で返してください。
+画像から以下の情報を読み取り、JSON形式のみで返してください。
 
 {
-  "supplier": "仕入れ先・取引先・会社名（見つからない場合はnull）",
-  "items": [{"name": "品名", "quantity": 数量, "unit": "単位", "price": 金額}]
+  "supplier": "仕入れ先・取引先・会社名（不明はnull）",
+  "date": "納品書の日付（YYYY-MM-DD形式、不明はnull）",
+  "items": [
+    {
+      "name": "品名",
+      "quantity": 数量,
+      "unit": "単位",
+      "price": 金額,
+      "category": "分類（魚介類/肉類/野菜・キノコ/米・麺・パン/調味料・油/乳製品・卵/仕込み品/その他 から選ぶ）"
+    }
+  ]
 }
 
 ルール：
 - supplierは納品書の発行元（会社名・店舗名・農家名など）
-- 品目行のみ抽出（ヘッダー行・合計行・税額行は除外）
-- quantityは数字のみ（例: 2）
+- dateは納品日または発行日（例: 2026-06-13）
+- 品目行のみ抽出（ヘッダー・合計・税額行は除外）
+- quantityは数字のみ
 - unitは単位（個/kg/g/本/尾/枚/袋/パック/束/缶/瓶/箱/ケース など）
 - priceは単価または金額（円単位の整数）
-- JSONのみ返す。説明文は不要
-
-読み取れる品目がない場合はitemsを空配列にする。`
+- categoryは必ず上記8種類のいずれかを選ぶ
+- JSONのみ返す。説明文不要。`
 
   const res = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
@@ -65,14 +74,16 @@ export async function POST(request: NextRequest) {
   const result = await res.json()
   const text: string = result.content?.[0]?.text ?? ''
 
-  let items: Array<{ name: string; quantity: number; unit: string; price: number }> = []
+  let items: Array<{ name: string; quantity: number; unit: string; price: number; category?: string }> = []
   let supplier: string | null = null
+  let date: string | null = null
   try {
     const jsonMatch = text.match(/\{[\s\S]*\}/)
     if (jsonMatch) {
       const parsed = JSON.parse(jsonMatch[0])
       items = parsed.items ?? []
       supplier = parsed.supplier ?? null
+      date = parsed.date ?? null
     } else {
       const arrayMatch = text.match(/\[[\s\S]*\]/)
       if (arrayMatch) items = JSON.parse(arrayMatch[0])
@@ -81,5 +92,5 @@ export async function POST(request: NextRequest) {
     items = []
   }
 
-  return NextResponse.json({ raw_text: text, items, supplier })
+  return NextResponse.json({ raw_text: text, items, supplier, date })
 }
