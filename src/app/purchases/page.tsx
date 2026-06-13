@@ -157,8 +157,22 @@ export default function PurchasesPage() {
 
       if (isPdf) {
         setOcrLoadingMsg('PDFを読み込み中...')
-        const pdfjsLib = await import('pdfjs-dist')
-        pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs'
+        // pdfjs-distをCDNから動的ロード（ビルド対象外にするため）
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const pdfjsLib: any = await new Promise((resolve, reject) => {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          if ((window as any).pdfjsLib) { resolve((window as any).pdfjsLib); return }
+          const script = document.createElement('script')
+          script.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js'
+          script.onload = () => {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const lib = (window as any).pdfjsLib
+            lib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'
+            resolve(lib)
+          }
+          script.onerror = reject
+          document.head.appendChild(script)
+        })
         const arrayBuffer = await ocrFile.arrayBuffer()
         const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise
         const numPages = Math.min(pdf.numPages, 5)
