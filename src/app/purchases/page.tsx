@@ -88,6 +88,7 @@ export default function PurchasesPage() {
   const [ocrLoading, setOcrLoading] = useState(false)
   const [ocrItems, setOcrItems] = useState<OcrItem[]>([])
   const [ocrRaw, setOcrRaw] = useState('')
+  const [ocrError, setOcrError] = useState('')
   const [ocrSupplier, setOcrSupplier] = useState('')
   const [ocrDate, setOcrDate] = useState(new Date().toISOString().split('T')[0])
   const [ocrStep, setOcrStep] = useState<'upload' | 'confirm'>('upload')
@@ -142,15 +143,22 @@ export default function PurchasesPage() {
   const handleOcrUpload = async () => {
     if (!ocrFile) return
     setOcrLoading(true)
+    setOcrError('')
     const fd = new FormData()
     fd.append('file', ocrFile)
     const res = await fetch('/api/ocr', { method: 'POST', body: fd })
     const data = await res.json()
-    setOcrRaw(data.raw_text ?? '')
-    setOcrItems((data.items ?? []).map((item: OcrItem) => ({
-      ...item,
-      ingredient_id: ingredients.find(i => i.name.includes(item.name) || item.name.includes(i.name))?.id ?? '',
-    })))
+    if (data.error) {
+      setOcrError(data.error)
+      setOcrRaw('')
+      setOcrItems([])
+    } else {
+      setOcrRaw(data.raw_text ?? '')
+      setOcrItems((data.items ?? []).map((item: OcrItem) => ({
+        ...item,
+        ingredient_id: ingredients.find(i => i.name.includes(item.name) || item.name.includes(i.name))?.id ?? '',
+      })))
+    }
     setOcrStep('confirm')
     setOcrLoading(false)
   }
@@ -467,14 +475,19 @@ export default function PurchasesPage() {
                 </div>
                 {ocrItems.length === 0 && (
                   <div className="py-4 space-y-3">
-                    <div className="text-center text-sm text-gray-400">品目が自動で読み取れませんでした。</div>
+                    {ocrError && (
+                      <div className="text-center text-xs text-red-500 p-3 bg-red-50 rounded">{ocrError}</div>
+                    )}
+                    {!ocrError && (
+                      <div className="text-center text-sm text-gray-400">品目が自動で読み取れませんでした。</div>
+                    )}
                     {ocrRaw && (
                       <details className="text-xs">
                         <summary className="cursor-pointer text-blue-500 text-center">OCR読み取りテキストを確認する</summary>
                         <pre className="mt-2 p-3 bg-gray-50 rounded text-gray-600 whitespace-pre-wrap break-all max-h-48 overflow-auto">{ocrRaw}</pre>
                       </details>
                     )}
-                    {!ocrRaw && (
+                    {!ocrRaw && !ocrError && (
                       <div className="text-center text-xs text-red-400">テキストが読み取れませんでした。PDFの画質を確認してください。</div>
                     )}
                   </div>
