@@ -158,7 +158,7 @@ export default function PurchasesPage() {
       if (isPdf) {
         setOcrLoadingMsg('PDFを読み込み中...')
         const pdfjsLib = await import('pdfjs-dist')
-        pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.js'
+        pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs'
         const arrayBuffer = await ocrFile.arrayBuffer()
         const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise
         const numPages = Math.min(pdf.numPages, 5)
