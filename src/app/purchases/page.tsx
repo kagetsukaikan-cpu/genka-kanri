@@ -145,17 +145,14 @@ export default function PurchasesPage() {
     if (!ocrFile) return
     setOcrLoading(true)
     setOcrError('')
-    setOcrLoadingMsg('OCRエンジンを準備中...')
 
     try {
-      const { createWorker } = await import('tesseract.js')
-      const worker = await createWorker('jpn+eng')
-
+      const isPdf = ocrFile.type === 'application/pdf' || ocrFile.name.toLowerCase().endsWith('.pdf')
       let combinedRaw = ''
       const allItems: OcrItem[] = []
-      const isPdf = ocrFile.type === 'application/pdf' || ocrFile.name.toLowerCase().endsWith('.pdf')
 
       if (isPdf) {
+        setOcrLoadingMsg('PDFを読み込み中...')
         const pdfjsLib = await import('pdfjs-dist')
         pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`
         const arrayBuffer = await ocrFile.arrayBuffer()
@@ -163,32 +160,41 @@ export default function PurchasesPage() {
         const numPages = Math.min(pdf.numPages, 5)
 
         for (let pageNum = 1; pageNum <= numPages; pageNum++) {
-          setOcrLoadingMsg(`読み取り中... (${pageNum}/${numPages}ページ)`)
+          setOcrLoadingMsg(`AI読み取り中... (${pageNum}/${numPages}ページ)`)
           const page = await pdf.getPage(pageNum)
           const viewport = page.getViewport({ scale: 2.0 })
           const canvas = document.createElement('canvas')
           canvas.width = viewport.width
           canvas.height = viewport.height
           await page.render({ canvasContext: canvas.getContext('2d')!, viewport }).promise
-          const { data: { text } } = await worker.recognize(canvas)
-          combinedRaw += text + '\n'
-          allItems.push(...parseInvoiceText(text))
+
+          const blob = await new Promise<Blob>(resolve => canvas.toBlob(b => resolve(b!), 'image/jpeg', 0.95))
+          const fd = new FormData()
+          fd.append('file', new File([blob], `page-${pageNum}.jpg`, { type: 'image/jpeg' }))
+          const res = await fetch('/api/ocr', { method: 'POST', body: fd })
+          const data = await res.json()
+          if (data.error) { setOcrError(data.error); setOcrStep('confirm'); setOcrLoading(false); return }
+          combinedRaw += (data.raw_text ?? '') + '\n'
+          allItems.push(...(data.items ?? []))
         }
       } else {
-        setOcrLoadingMsg('画像を読み取り中...')
-        const { data: { text } } = await worker.recognize(ocrFile)
-        combinedRaw = text
-        allItems.push(...parseInvoiceText(text))
+        setOcrLoadingMsg('AI読み取り中...')
+        const fd = new FormData()
+        fd.append('file', ocrFile)
+        const res = await fetch('/api/ocr', { method: 'POST', body: fd })
+        const data = await res.json()
+        if (data.error) { setOcrError(data.error); setOcrStep('confirm'); setOcrLoading(false); return }
+        combinedRaw = data.raw_text ?? ''
+        allItems.push(...(data.items ?? []))
       }
 
-      await worker.terminate()
       setOcrRaw(combinedRaw.trim())
       setOcrItems(allItems.map(item => ({
         ...item,
         ingredient_id: ingredients.find(i => i.name.includes(item.name) || item.name.includes(i.name))?.id ?? '',
       })))
     } catch (e) {
-      setOcrError(`OCR読み取りに失敗しました: ${String(e)}`)
+      setOcrError(`読み取りに失敗しました: ${String(e)}`)
     }
 
     setOcrStep('confirm')
