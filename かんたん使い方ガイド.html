@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>原価率管理システム かんたん使い方ガイド</title>
+<style>
+  :root{
+    --bg:#f6f5f2; --surface:#ffffff; --ink:#1f2430; --muted:#5b6472; --faint:#8b93a1;
+    --line:#e7e4dd; --accent:#2563eb; --accent-soft:#eef3ff;
+    --green:#15803d; --green-soft:#effaf1; --red:#dc2626; --red-soft:#fdf0f0;
+    --amber:#b45309; --amber-soft:#fdf6ea;
+    --font: -apple-system,"Segoe UI","Hiragino Kaku Gothic ProN","Yu Gothic UI",Meiryo,sans-serif;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{--bg:#14171c;--surface:#1b1f26;--ink:#eef1f5;--muted:#a9b1bd;--faint:#79818e;
+      --line:#2a2f38;--accent:#6ea2ff;--accent-soft:#182338;--green:#5bd08a;--green-soft:#13251a;
+      --red:#f2807f;--red-soft:#2a1717;--amber:#e9b45f;--amber-soft:#2a2210;}
+  }
+  *{box-sizing:border-box;}
+  html{-webkit-text-size-adjust:100%;}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--font);line-height:1.75;}
+  .wrap{max-width:760px;margin:0 auto;padding:40px 22px 72px;}
+  header.top{text-align:center;margin-bottom:34px;}
+  .badge{display:inline-block;font-size:12px;letter-spacing:.14em;color:var(--accent);background:var(--accent-soft);
+    padding:5px 12px;border-radius:999px;font-weight:700;}
+  h1{font-size:27px;margin:14px 0 6px;letter-spacing:-.01em;text-wrap:balance;}
+  .sub{color:var(--muted);font-size:14.5px;margin:0;}
+  .card{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:22px 24px;margin:16px 0;
+    box-shadow:0 1px 2px rgba(20,24,32,.04);}
+  h2{font-size:18px;margin:0 0 4px;display:flex;align-items:center;gap:10px;}
+  h2 .no{flex:none;width:30px;height:30px;border-radius:9px;background:var(--accent);color:#fff;font-size:15px;
+    display:grid;place-items:center;font-weight:700;}
+  .who{font-size:12px;font-weight:700;padding:2px 9px;border-radius:999px;background:var(--accent-soft);color:var(--accent);}
+  ol.steps{margin:14px 0 0;padding-left:0;counter-reset:s;list-style:none;}
+  ol.steps li{position:relative;padding:8px 0 8px 40px;border-top:1px solid var(--line);}
+  ol.steps li:first-child{border-top:none;}
+  ol.steps li::before{counter-increment:s;content:counter(s);position:absolute;left:0;top:9px;width:24px;height:24px;
+    border-radius:50%;background:var(--accent-soft);color:var(--accent);font-size:13px;font-weight:700;
+    display:grid;place-items:center;}
+  .k{font-weight:700;}
+  .url{font-family:ui-monospace,Menlo,Consolas,monospace;background:var(--accent-soft);color:var(--accent);
+    padding:2px 8px;border-radius:7px;font-size:14px;word-break:break-all;}
+  .note{font-size:13.5px;color:var(--muted);background:var(--bg);border-radius:10px;padding:10px 14px;margin-top:14px;}
+  .pill{display:inline-flex;align-items:center;gap:6px;font-size:13px;font-weight:700;padding:3px 10px;border-radius:999px;}
+  .pill.g{background:var(--green-soft);color:var(--green);} .pill.r{background:var(--red-soft);color:var(--red);}
+  .legend{display:flex;flex-wrap:wrap;gap:10px;margin-top:12px;}
+  dl.faq{margin:8px 0 0;} dl.faq dt{font-weight:700;margin-top:14px;}
+  dl.faq dt::before{content:"Q. ";color:var(--accent);}
+  dl.faq dd{margin:4px 0 0;color:var(--muted);} dl.faq dd::before{content:"A. ";color:var(--green);font-weight:700;}
+  .foot{margin-top:26px;padding-top:16px;border-top:1px solid var(--line);color:var(--faint);font-size:12.5px;text-align:center;}
+  .tip{border-left:3px solid var(--amber);background:var(--amber-soft);padding:10px 14px;border-radius:0 10px 10px 0;
+    font-size:13.5px;color:var(--ink);margin-top:14px;}
+  @media print{
+    body{background:#fff;} .card{box-shadow:none;border-color:#ddd;break-inside:avoid;}
+    .wrap{padding:0;} a{color:inherit;text-decoration:none;}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <span class="badge">かんたん使い方ガイド</span>
+    <h1>原価率管理システム</h1>
+    <p class="sub">食材の仕入価格から、メニューの「原価率」と「儲け」をひと目で確認できる社内アプリです。</p>
+  </header>
+
+  <section class="card">
+    <h2><span class="no">1</span> ひらく・ログイン</h2>
+    <ol class="steps">
+      <li>ブラウザ（Chrome・Edge・スマホ可）で <span class="url">genka-kanri-nine.vercel.app</span> を開く</li>
+      <li>ユーザー名とパスワードを入れて「ログイン」</li>
+      <li>パソコン・スマホ・タブレット、どれからでも同じデータが見られます</li>
+    </ol>
+    <div class="note">ログイン情報が分からないときは管理者（石黒）に確認してください。<br>よく使うPCはブラウザのお気に入り（ブックマーク）に登録しておくと便利です。</div>
+  </section>
+
+  <section class="card">
+    <h2><span class="no">2</span> 仕入を取り込む <span class="who">事務さん向け・毎月</span></h2>
+    <p style="margin:6px 0 0;color:var(--muted);font-size:14px;">インフォマートのCSVを取り込むと、食材の最新の仕入価格が自動で更新されます。</p>
+    <ol class="steps">
+      <li>インフォマートの「受発注履歴」→「CSVダウンロード」でファイルを保存</li>
+      <li>アプリ左メニューの <span class="k">仕入履歴・納品書</span> を開く</li>
+      <li>右上の <span class="k">インフォマートCSV</span> ボタンを押す</li>
+      <li>保存したCSVファイルを選ぶ（またはドラッグ＆ドロップ）</li>
+      <li>内容（仕入先・分類）を確認して <span class="k">登録</span> を押す</li>
+    </ol>
+    <div class="tip">消耗品や包材（容器・割り箸など）は自動で対象外になります。手で1件だけ足したいときは「手動入力」も使えます。</div>
+  </section>
+
+  <section class="card">
+    <h2><span class="no">3</span> メニューの原価を計算する <span class="who">料理長向け</span></h2>
+    <ol class="steps">
+      <li>左メニューの <span class="k">メニュー原価計算</span> →「メニューを追加」</li>
+      <li><span class="k">メニュー名</span> と <span class="k">売価（円）</span> を入れる（目標原価率は初期30%）</li>
+      <li>「食材を追加」で食材を選び、<span class="k">数量だけ</span>入れる<br><span style="color:var(--muted);font-size:13px;">※単位（g・個など）は食材を選ぶと自動で決まります</span></li>
+      <li>下の <span class="k">原価集計</span> に、合計原価・原価率・粗利益と判定が出ます</li>
+      <li><span class="k">保存する</span> を押して完了</li>
+    </ol>
+  </section>
+
+  <section class="card">
+    <h2><span class="no">4</span> 画面の見方</h2>
+    <div class="legend">
+      <span class="pill g">✓ 目標より低め＝良好</span>
+      <span class="pill r">⚠ 目標より高め＝見直し</span>
+    </div>
+    <ul style="margin:14px 0 0;padding-left:20px;color:var(--muted);font-size:14px;">
+      <li><span class="k" style="color:var(--ink)">原価率</span>：売価に対して原価が占める割合。低いほど利益が大きい。</li>
+      <li><span class="k" style="color:var(--ink)">粗利益</span>：売価 − 原価。1品あたりの儲け。</li>
+      <li><span class="k" style="color:var(--ink)">目標原価率</span>：この線を超える（赤）と「見直しましょう」の合図。</li>
+      <li><span class="k" style="color:var(--ink)">使える割合</span>：皮・骨などを除いて実際に使える割合（丸ごと使うなら100%）。</li>
+    </ul>
+  </section>
+
+  <section class="card">
+    <h2><span class="no">5</span> 食材・仕入先の管理</h2>
+    <ul style="margin:8px 0 0;padding-left:20px;color:var(--muted);font-size:14px;">
+      <li><span class="k" style="color:var(--ink)">食材マスタ</span>：食材ごとの単価・分類・仕入先を確認／登録。CSV取込で自動追加もされます。</li>
+      <li><span class="k" style="color:var(--ink)">仕入先</span>：取引先の一覧。CSV取込時に自動で作られることもあります。</li>
+    </ul>
+  </section>
+
+  <section class="card">
+    <h2><span class="no">?</span> 困ったとき</h2>
+    <dl class="faq">
+      <dt>ログインできない</dt>
+      <dd>ユーザー名・パスワードを確認。ブラウザを最新にして再度お試しを。分からなければ管理者へ。</dd>
+      <dt>食材の値段が古い気がする</dt>
+      <dd>最新のインフォマートCSVを「2. 仕入を取り込む」の手順で取り込むと更新されます。</dd>
+      <dt>原価の数字がおかしい</dt>
+      <dd>その食材の単位（g・個など）と数量が正しいか確認。直らなければ管理者に連絡を。</dd>
+      <dt>スマホでも使える？</dt>
+      <dd>はい。同じURLをスマホのブラウザで開けば使えます。</dd>
+    </dl>
+  </section>
+
+  <div class="foot">
+    原価率管理システム 使い方ガイド／管理者：石黒<br>
+    ご不明な点や「こうしたい」があれば管理者までお知らせください。
+  </div>
+</div>
+</body>
+</html>
