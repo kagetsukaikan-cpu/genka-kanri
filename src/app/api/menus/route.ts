@@ -33,7 +33,7 @@ export async function GET() {
 
 export async function POST(request: NextRequest) {
   const body = await request.json()
-  const { menu_ingredients, ...menuData } = body
+  const { menu_ingredients, image_url: _image_url, ...menuData } = body
 
   const { data: menu, error: menuError } = await supabase
     .from('menus')
@@ -46,7 +46,7 @@ export async function POST(request: NextRequest) {
   if (menu_ingredients?.length) {
     const rows = menu_ingredients.map((mi: { ingredient_id?: string; ingredient_name: string; quantity: number; unit: string; unit_price?: number; sort_order?: number }) => ({
       menu_id: menu.id,
-      ingredient_id: mi.ingredient_id ?? null,
+      ingredient_id: mi.ingredient_id || null,
       ingredient_name: mi.ingredient_name,
       quantity: mi.quantity,
       unit: mi.unit,

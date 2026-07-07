@@ -43,6 +43,9 @@ export default function MenusPage() {
             return (
               <Link key={menu.id} href={`/menus/${menu.id}`}
                 className="bg-white rounded-xl border border-gray-200 p-5 hover:border-blue-300 hover:shadow-sm transition-all group">
+                {menu.image_url && (
+                  <img src={menu.image_url} alt={menu.name} className="w-full h-32 object-cover rounded-lg mb-3" />
+                )}
                 <div className="flex items-start justify-between mb-3">
                   <div>
                     <h3 className="font-semibold text-gray-900 group-hover:text-blue-700 transition-colors">{menu.name}</h3>

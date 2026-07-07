@@ -6,7 +6,7 @@ import Layout from '@/components/Layout'
 const geist = Geist({ subsets: ['latin'] })
 
 export const metadata: Metadata = {
-  title: '原価管理システム',
+  title: '原価率管理システム',
   description: '料理メニューの原価率計算・仕入管理システム',
 }
 

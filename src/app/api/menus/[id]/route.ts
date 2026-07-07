@@ -50,7 +50,7 @@ export async function PUT(request: NextRequest, { params }: Context) {
     if (menu_ingredients.length) {
       const rows = menu_ingredients.map((mi: Record<string, unknown>, idx: number) => ({
         menu_id: id,
-        ingredient_id: mi.ingredient_id ?? null,
+        ingredient_id: mi.ingredient_id || null,
         ingredient_name: mi.ingredient_name,
         quantity: mi.quantity,
         unit: mi.unit,

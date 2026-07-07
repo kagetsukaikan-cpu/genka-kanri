@@ -1,8 +1,13 @@
 'use client'
 
 import { useEffect, useState, useCallback } from 'react'
-import { Plus, Upload, Trash2, X, CheckCircle, AlertCircle, FileSpreadsheet } from 'lucide-react'
-import type { PurchaseHistory, Supplier, Ingredient, OcrItem, IngredientCategory } from '@/types'
+import { Plus, Trash2, X, AlertCircle, FileSpreadsheet, Search } from 'lucide-react'
+import type { PurchaseHistory, Supplier, Ingredient, IngredientCategory } from '@/types'
+import { normalizeForSearch } from '@/lib/search'
+import { toGrams, extractGramsFromName } from '@/lib/weight'
+import { toReferenceQuantity } from '@/lib/price'
+
+const UNITS = ['g', 'kg', 'cc', 'ml', '個', '枚', '本', '袋', 'パック', '尾']
 
 const emptyForm = {
   purchase_date: new Date().toISOString().split('T')[0],
@@ -33,16 +38,24 @@ function parseCSVLine(line: string): string[] {
   return result
 }
 
+// ヘッダーの前後の括弧（全角／半角）と引用符を取り除き、キーを統一する
+function normalizeHeader(h: string): string {
+  return h.replace(/^﻿/, '').trim().replace(/^"|"$/g, '').replace(/^[［\[]|[］\]]$/g, '').trim()
+}
+
 function parseInfomartCSV(text: string): Record<string, string>[] {
   const lines = text.split(/\r?\n/).filter(l => l.trim())
-  if (lines.length < 2) return []
-  const headers = parseCSVLine(lines[0]).map(h => h.replace(/^"?\[(.+?)\]"?$/, '[$1]').trim())
-  return lines.slice(1).map(line => {
+  // 先頭行は "H",日付 のヘッダー情報行なので、実際の列見出し行（商品名を含む行）を探す
+  const headerIndex = lines.findIndex(l => l.includes('商品名'))
+  if (headerIndex === -1) return []
+  const headers = parseCSVLine(lines[headerIndex]).map(normalizeHeader)
+  const dataIndex = headers.indexOf('データ区分')
+  return lines.slice(headerIndex + 1).map(line => {
     const values = parseCSVLine(line)
     const row: Record<string, string> = {}
     headers.forEach((h, i) => { row[h] = (values[i] ?? '').trim() })
     return row
-  }).filter(row => row['［商品名］'] && row['［商品名］'].trim())
+  }).filter(row => (dataIndex === -1 || row['データ区分'] === 'D') && row['商品名'] && row['商品名'].trim())
 }
 
 type CsvItem = {
@@ -50,28 +63,104 @@ type CsvItem = {
   supplier_name: string
   supplier_id: string
   ingredient_name: string
+  ingredient_id: string
+  category_name: string
   quantity: number
   unit: string
   unit_price: number
   price: number
   spec: string
+  case_size: number
+  case_unit: string
+}
+
+// 商品名からカテゴリを推測（食材マスタに未登録の場合のフォールバック）
+function guessCategory(name: string): string {
+  const rules: [string, string[]][] = [
+    ['魚介類', ['魚', '鮮魚', '海老', 'えび', 'エビ', 'イカ', 'いか', 'タコ', 'たこ', 'カニ', 'かに', '貝', 'サーモン', 'マグロ', '鯛', '鰯', '鯖', 'さば', 'いくら', 'ウニ', 'うに', 'アジ', 'ぶり', 'カンパチ', 'ヒラメ', '牡蠣', 'かき', '海鮮', '鰻', 'うなぎ', '今津']],
+    ['肉類', ['肉', '牛', '豚', '鶏', '鴨', 'ささみ', 'もも肉', 'バラ', 'ロース', 'ひき肉', 'ベーコン', 'ハム', 'ソーセージ']],
+    ['野菜・キノコ', ['野菜', 'キノコ', 'きのこ', '大根', '人参', 'にんじん', 'キャベツ', '白菜', 'ねぎ', 'ネギ', '玉ねぎ', 'たまねぎ', 'じゃがいも', '芋', 'トマト', 'きゅうり', 'なす', 'しいたけ', 'しめじ', 'えのき', 'まいたけ', 'ごぼう', 'れんこん', 'ほうれん草', '小松菜', '枝豆', 'ピーマン', 'かぼちゃ']],
+    ['米・麺・パン', ['米', 'こめ', '麺', 'そば', 'うどん', 'パスタ', 'パン', '餅', 'もち', 'ご飯']],
+    ['調味料・油', ['醤油', 'しょうゆ', '味噌', 'みそ', '油', '塩', '砂糖', '酢', 'だし', 'ソース', 'みりん', '酒', '胡椒', 'こしょう', 'ドレッシング', 'たれ', 'タレ']],
+    ['乳製品・卵', ['卵', 'たまご', '牛乳', 'チーズ', 'バター', '生クリーム', 'ヨーグルト']],
+  ]
+  for (const [category, keywords] of rules) {
+    if (keywords.some(k => name.includes(k))) return category
+  }
+  return 'その他'
+}
+
+// 調理食材・調味料以外（消耗品・包材・備品など）は仕入CSV取込の対象外とする
+const NON_FOOD_KEYWORDS = [
+  '容器', 'ラップ', 'アルミホイル', '割り箸', '割箸', 'お箸', '爪楊枝', 'つまようじ',
+  '手袋', '軍手', 'おしぼり', 'ナプキン', 'ペーパー', 'タオル', '紙コップ', '紙皿', '紙ナプキン',
+  'ストロー', '洗剤', 'スポンジ', 'ゴミ袋', 'ごみ袋', '段ボール', 'ダンボール', 'シール', 'ラベル',
+  '輪ゴム', '養生テープ', 'テープ', 'マスク', 'アルコール', '除菌', '消毒', '軍手',
+  '名刺', '伝票', '請求書', '封筒', 'レジ袋', '買い物袋', '弁当箱', '使い捨て',
+]
+function isNonFoodItem(name: string): boolean {
+  return NON_FOOD_KEYWORDS.some(k => name.includes(k))
+}
+
+// 食材を扱わない取引先（備品・印刷・ユニフォーム業者など）は仕入CSV取込の対象外とする
+const NON_FOOD_SUPPLIER_KEYWORDS = ['吉竹商店', '大垣商事', 'うえ田', 'サニクリーン']
+function isNonFoodSupplier(name: string): boolean {
+  return NON_FOOD_SUPPLIER_KEYWORDS.some(k => name.includes(k))
+}
+
+// "2026/06/01" → "2026-06-01"（date input用）
+function toIsoDate(s: string): string {
+  return s.trim().replace(/\//g, '-')
 }
 
 function rowToCsvItem(row: Record<string, string>): CsvItem {
-  const date = (row['［納品日］'] || row['［伝票日付］'] || row['［発注日］'] || '').trim()
-  const price = parseFloat((row['［金額］'] || '0').replace(/,/g, '')) || 0
-  const unitPrice = parseFloat((row['［単価］'] || '0').replace(/,/g, '')) || 0
-  const quantity = parseFloat((row['［数量］'] || '0').replace(/,/g, '')) || 0
+  const date = toIsoDate(row['納品日'] || row['伝票日付'] || row['発注日'] || '')
+  const price = parseFloat((row['金額'] || '0').replace(/,/g, '')) || 0
+  const unitPrice = parseFloat((row['単価'] || '0').replace(/,/g, '')) || 0
+  const quantity = parseFloat((row['数量'] || '0').replace(/,/g, '')) || 0
   return {
     purchase_date: date,
-    supplier_name: (row['［取引先名］'] || '').trim(),
+    supplier_name: (row['取引先名'] || '').trim(),
     supplier_id: '',
-    ingredient_name: (row['［商品名］'] || '').trim(),
+    ingredient_name: (row['商品名'] || '').trim(),
+    ingredient_id: '',
+    category_name: '',
     quantity,
-    unit: (row['［単位］'] || '個').trim(),
+    unit: (row['単位'] || '個').trim(),
     unit_price: unitPrice,
     price,
-    spec: (row['［規格］'] || '').trim(),
+    spec: (row['規格'] || '').trim(),
+    case_size: parseFloat((row['入数'] || '0').replace(/,/g, '')) || 0,
+    case_unit: (row['入数単位'] || '').trim(),
+  }
+}
+
+// ケース（C/S）等で仕入れた場合、入数を使って「1単位あたりの単価」に正規化する（全カテゴリ対象）
+// メニューでの使用量計算に使えるよう、kg/gは100g基準のグラムに、それ以外（個/本/枚など）は1単位あたりの単価にする
+function normalizeToWeightUnit(item: CsvItem) {
+  const caseSize = item.case_size > 0 ? item.case_size : 1
+  const totalQuantity = item.quantity * caseSize
+
+  // 入数単位（または単位）がkg/gならグラムに正規化
+  let totalGrams = toGrams(item.case_unit || item.unit, totalQuantity)
+
+  // 単位だけでは重量が分からない場合、商品名の重量表記（例:「豚肉500g」）から推定する
+  if (totalGrams == null) {
+    const gramsPerPiece = extractGramsFromName(item.ingredient_name)
+    if (gramsPerPiece != null) totalGrams = item.quantity * caseSize * gramsPerPiece
+  }
+
+  if (totalGrams != null && totalGrams > 0) {
+    item.quantity = totalGrams
+    item.unit = 'g'
+    item.unit_price = item.price / totalGrams
+    return
+  }
+
+  if (item.case_size > 0 && item.case_unit && totalQuantity > 0) {
+    item.quantity = totalQuantity
+    item.unit = item.case_unit
+    item.unit_price = item.price / totalQuantity
   }
 }
 
@@ -83,25 +172,14 @@ export default function PurchasesPage() {
   const [showForm, setShowForm] = useState(false)
   const [form, setForm] = useState(emptyForm)
   const [saving, setSaving] = useState(false)
-
-  // OCR関連
-  const [ocrFile, setOcrFile] = useState<File | null>(null)
-  const [ocrLoading, setOcrLoading] = useState(false)
-  const [ocrLoadingMsg, setOcrLoadingMsg] = useState('AI読み取り中...')
-  const [ocrItems, setOcrItems] = useState<OcrItem[]>([])
-  const [ocrRaw, setOcrRaw] = useState('')
-  const [ocrError, setOcrError] = useState('')
-  const [ocrSupplier, setOcrSupplier] = useState('')
-  const [ocrSupplierName, setOcrSupplierName] = useState('')
-  const [ocrDate, setOcrDate] = useState(new Date().toISOString().split('T')[0])
-  const [ocrStep, setOcrStep] = useState<'upload' | 'confirm'>('upload')
-  const [showOcr, setShowOcr] = useState(false)
+  const [search, setSearch] = useState('')
 
   // インフォマートCSV関連
   const [showCsv, setShowCsv] = useState(false)
   const [csvStep, setCsvStep] = useState<'upload' | 'confirm'>('upload')
   const [csvItems, setCsvItems] = useState<CsvItem[]>([])
   const [csvError, setCsvError] = useState('')
+  const [csvExcludedCount, setCsvExcludedCount] = useState(0)
 
   const load = useCallback(async () => {
     const [p, s, i, c] = await Promise.all([
@@ -121,6 +199,28 @@ export default function PurchasesPage() {
   const handleDelete = async (id: string) => {
     if (!confirm('この仕入履歴を削除しますか？')) return
     await fetch(`/api/purchases/${id}`, { method: 'DELETE' })
+    load()
+  }
+
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+
+  const toggleSelect = (id: string) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  const toggleSelectAll = () => {
+    setSelectedIds(prev => prev.size === filtered.length ? new Set() : new Set(filtered.map(p => p.id)))
+  }
+
+  const handleBulkDelete = async () => {
+    if (!confirm(`選択した${selectedIds.size}件の仕入履歴を削除しますか？`)) return
+    await Promise.all([...selectedIds].map(id => fetch(`/api/purchases/${id}`, { method: 'DELETE' })))
+    setSelectedIds(new Set())
     load()
   }
 
@@ -144,274 +244,157 @@ export default function PurchasesPage() {
     load()
   }
 
-  // OCR処理
-  const handleOcrUpload = async () => {
-    if (!ocrFile) return
-    setOcrLoading(true)
-    setOcrError('')
-
-    try {
-      const isPdf = ocrFile.type === 'application/pdf' || ocrFile.name.toLowerCase().endsWith('.pdf')
-      let combinedRaw = ''
-      const allItems: OcrItem[] = []
-
-      if (isPdf) {
-        setOcrLoadingMsg('PDFを読み込み中...')
-        // pdfjs-distをCDNから動的ロード（ビルド対象外にするため）
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const pdfjsLib: any = await new Promise((resolve, reject) => {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          if ((window as any).pdfjsLib) { resolve((window as any).pdfjsLib); return }
-          const script = document.createElement('script')
-          script.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js'
-          script.onload = () => {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const lib = (window as any).pdfjsLib
-            lib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'
-            resolve(lib)
-          }
-          script.onerror = reject
-          document.head.appendChild(script)
-        })
-        const arrayBuffer = await ocrFile.arrayBuffer()
-        const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise
-        const numPages = Math.min(pdf.numPages, 5)
-
-        for (let pageNum = 1; pageNum <= numPages; pageNum++) {
-          setOcrLoadingMsg(`AI読み取り中... (${pageNum}/${numPages}ページ)`)
-          const page = await pdf.getPage(pageNum)
-          const viewport = page.getViewport({ scale: 2.0 })
-          const canvas = document.createElement('canvas')
-          canvas.width = viewport.width
-          canvas.height = viewport.height
-          await page.render({ canvasContext: canvas.getContext('2d')!, viewport }).promise
-
-          const blob = await new Promise<Blob>(resolve => canvas.toBlob(b => resolve(b!), 'image/jpeg', 0.95))
-          const fd = new FormData()
-          fd.append('file', new File([blob], `page-${pageNum}.jpg`, { type: 'image/jpeg' }))
-          const res = await fetch('/api/ocr', { method: 'POST', body: fd })
-          const data = await res.json()
-          if (data.error) { setOcrError(data.error); setOcrStep('confirm'); setOcrLoading(false); return }
-          combinedRaw += (data.raw_text ?? '') + '\n'
-          allItems.push(...(data.items ?? []))
-          if (data.supplier) {
-            setOcrSupplierName(data.supplier)
-            const matched = suppliers.find(s => s.name.includes(data.supplier) || data.supplier.includes(s.name))
-            if (matched) setOcrSupplier(matched.id)
-          }
-          if (data.date) setOcrDate(data.date)
-        }
-      } else {
-        setOcrLoadingMsg('AI読み取り中...')
-        const fd = new FormData()
-        fd.append('file', ocrFile)
-        const res = await fetch('/api/ocr', { method: 'POST', body: fd })
-        const data = await res.json()
-        if (data.error) { setOcrError(data.error); setOcrStep('confirm'); setOcrLoading(false); return }
-        combinedRaw = data.raw_text ?? ''
-        allItems.push(...(data.items ?? []))
-        if (data.supplier) {
-          setOcrSupplierName(data.supplier)
-          const matched = suppliers.find(s => s.name.includes(data.supplier) || data.supplier.includes(s.name))
-          if (matched) setOcrSupplier(matched.id)
-        }
-        if (data.date) setOcrDate(data.date)
-      }
-
-      setOcrRaw(combinedRaw.trim())
-      setOcrItems(allItems.map(item => ({
-        ...item,
-        ingredient_id: ingredients.find(i => i.name.includes(item.name) || item.name.includes(i.name))?.id ?? '',
-      })))
-    } catch (e) {
-      setOcrError(`読み取りに失敗しました: ${String(e)}`)
-    }
-
-    setOcrStep('confirm')
-    setOcrLoading(false)
-  }
-
-  function parseInvoiceText(text: string): OcrItem[] {
-    const items: OcrItem[] = []
-    const lines = text.split('\n').map(l => l.trim()).filter(Boolean)
-    const skipWords = ['品名', '商品名', '数量', '単位', '単価', '金額', '合計', '小計', '税', '備考', '納品書', '請求書', '御中', '様']
-    const unitPattern = /kg|g|cc|ml|個|枚|本|袋|パック|尾|冊|束|串|缶|瓶|箱|ケース/
-
-    for (const line of lines) {
-      if (skipWords.some(w => line.includes(w) && line.length < 15)) continue
-      if (!/[぀-ヿ一-鿿]/.test(line)) continue
-      if (!/\d/.test(line)) continue
-
-      const p1 = line.match(/^([぀-ヿ一-鿿\w・＆&\s]+?)\s+(\d+(?:\.\d+)?)\s*(kg|g|cc|ml|個|枚|本|袋|パック|尾|冊|束|串|缶|瓶|箱|ケース)?\s/)
-      if (p1) {
-        const name = p1[1].trim()
-        const quantity = parseFloat(p1[2])
-        const unit = p1[3] ?? '個'
-        const allNums = line.match(/[\d,]+/g) ?? []
-        const price = allNums.length > 0 ? parseInt(allNums[allNums.length - 1].replace(/,/g, ''), 10) : 0
-        if (name.length >= 2 && !isNaN(quantity) && price >= 100) {
-          items.push({ name, quantity, unit, price })
-          continue
-        }
-      }
-
-      const p2 = line.match(/^([぀-ヿ一-鿿\w・＆&\s]+?)\s+[\¥￥]?([\d,]+)円?/)
-      if (p2) {
-        const name = p2[1].trim()
-        const price = parseInt(p2[2].replace(/,/g, ''), 10)
-        const unitMatch = line.match(unitPattern)
-        const quantityMatch = line.match(/(\d+(?:\.\d+)?)\s*(kg|g|cc|ml|個|枚|本|袋|パック|尾|冊|束|串|缶|瓶|箱|ケース)/)
-        if (name.length >= 2 && price >= 100) {
-          items.push({
-            name,
-            quantity: quantityMatch ? parseFloat(quantityMatch[1]) : 1,
-            unit: unitMatch ? unitMatch[0] : '個',
-            price,
-          })
-        }
-      }
-    }
-    return items
-  }
-
-  const handleOcrSave = async () => {
-    setSaving(true)
-
-    // 1. 仕入先の確認・自動作成
-    let supplierId = ocrSupplier
-    if (!supplierId && ocrSupplierName) {
-      const matched = suppliers.find(s => s.name.includes(ocrSupplierName) || ocrSupplierName.includes(s.name))
-      if (matched) {
-        supplierId = matched.id
-      } else {
-        const res = await fetch('/api/suppliers', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name: ocrSupplierName }),
-        })
-        if (res.ok) { const s = await res.json(); supplierId = s.id }
-      }
-    }
-
-    // 2. 各品目：食材の確認・自動作成→仕入履歴登録→価格更新
-    for (const item of ocrItems) {
-      // 食材マスタで検索
-      let ingredient = ingredients.find(i => i.id === item.ingredient_id)
-        ?? ingredients.find(i => i.name === item.name || i.name.includes(item.name) || item.name.includes(i.name))
-
-      if (!ingredient) {
-        // カテゴリID取得
-        const cat = categories.find(c => c.name === (item.category ?? 'その他')) ?? categories.find(c => c.name === 'その他')
-        const res = await fetch('/api/ingredients', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            name: item.name,
-            unit: item.unit,
-            category_id: cat?.id ?? null,
-            supplier_id: supplierId || null,
-            purchase_price: item.price,
-            purchase_quantity: item.quantity,
-          }),
-        })
-        if (res.ok) ingredient = await res.json()
-      }
-
-      const unitPrice = item.quantity > 0 ? item.price / item.quantity : item.price
-
-      // 仕入履歴登録
-      await fetch('/api/purchases', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          purchase_date: ocrDate,
-          supplier_id: supplierId || null,
-          ingredient_id: ingredient?.id ?? null,
-          ingredient_name: item.name,
-          quantity: item.quantity,
-          unit: item.unit,
-          price: item.price,
-          unit_price: unitPrice,
-          ocr_raw_text: ocrRaw,
-        }),
-      })
-
-      // 食材マスタの価格を最新に更新
-      if (ingredient?.id) {
-        await fetch(`/api/ingredients/${ingredient.id}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            purchase_price: item.price,
-            purchase_quantity: item.quantity,
-            supplier_id: supplierId || ingredient.supplier_id || null,
-          }),
-        })
-      }
-    }
-
-    setSaving(false)
-    setShowOcr(false)
-    setOcrStep('upload')
-    setOcrFile(null)
-    setOcrItems([])
-    setOcrSupplierName('')
-    load()
-  }
-
   // インフォマートCSV処理
   const handleCsvFile = (file: File) => {
     setCsvError('')
-    const reader = new FileReader()
-    reader.onload = (e) => {
-      try {
-        const text = e.target?.result as string
-        const rows = parseInfomartCSV(text)
-        if (rows.length === 0) {
-          setCsvError('インフォマート形式のデータが見つかりませんでした。ファイルを確認してください。')
-          return
-        }
-        const items = rows.map(row => {
-          const item = rowToCsvItem(row)
-          // 仕入先名で自動マッチング
-          const matched = suppliers.find(s =>
-            s.name === item.supplier_name ||
-            s.name.includes(item.supplier_name) ||
-            item.supplier_name.includes(s.name)
-          )
-          item.supplier_id = matched?.id ?? ''
-          return item
-        })
-        setCsvItems(items)
-        setCsvStep('confirm')
-      } catch {
-        setCsvError('CSVの読み込みに失敗しました。')
-      }
+
+    const applyRows = (rows: Record<string, string>[]) => {
+      const foodRows = rows.filter(row =>
+        !isNonFoodItem((row['商品名'] || '').trim()) &&
+        !isNonFoodSupplier((row['取引先名'] || '').trim())
+      )
+      setCsvExcludedCount(rows.length - foodRows.length)
+      const items = foodRows.map(row => {
+        const item = rowToCsvItem(row)
+        // 仕入先名で自動マッチング
+        const matchedSupplier = suppliers.find(s =>
+          s.name === item.supplier_name ||
+          s.name.includes(item.supplier_name) ||
+          item.supplier_name.includes(s.name)
+        )
+        item.supplier_id = matchedSupplier?.id ?? ''
+        // 食材名で自動マッチング（既存食材ならそのカテゴリを採用、未登録なら推測）
+        const matchedIngredient = ingredients.find(i =>
+          i.name === item.ingredient_name ||
+          i.name.includes(item.ingredient_name) ||
+          item.ingredient_name.includes(i.name)
+        )
+        item.ingredient_id = matchedIngredient?.id ?? ''
+        item.category_name = matchedIngredient?.category?.name ?? guessCategory(item.ingredient_name)
+        normalizeToWeightUnit(item)
+        return item
+      })
+      setCsvItems(items)
+      setCsvStep('confirm')
     }
-    // Shift-JIS対応
-    reader.readAsText(file, 'Shift-JIS')
+
+    const readWith = (encoding: string, onFail: () => void) => {
+      const reader = new FileReader()
+      reader.onload = (e) => {
+        try {
+          const text = e.target?.result as string
+          const rows = parseInfomartCSV(text)
+          if (rows.length === 0) { onFail(); return }
+          applyRows(rows)
+        } catch {
+          onFail()
+        }
+      }
+      reader.onerror = onFail
+      reader.readAsText(file, encoding)
+    }
+
+    // Shift-JIS（インフォマート標準）でまず試し、ダメならUTF-8で再試行
+    readWith('Shift-JIS', () => {
+      readWith('UTF-8', () => {
+        setCsvError('インフォマート形式のデータが見つかりませんでした。ファイルを確認してください。')
+      })
+    })
   }
 
   const handleCsvSave = async () => {
     setSaving(true)
+
+    // 仕入先名→ID のキャッシュ（同名の仕入先を重複作成しないため）
+    const supplierCache = new Map<string, string>()
+
+    // 同一食材が複数行ある場合、食材マスタの単価には最新納品日の行のみを反映する
+    const latestByName = new Map<string, CsvItem>()
     for (const item of csvItems) {
-      const ing = ingredients.find(i =>
-        i.name === item.ingredient_name || item.ingredient_name.includes(i.name)
-      )
+      const prev = latestByName.get(item.ingredient_name)
+      if (!prev || item.purchase_date > prev.purchase_date) {
+        latestByName.set(item.ingredient_name, item)
+      }
+    }
+
+    for (const item of csvItems) {
+      // 1. 仕入先の確認・自動作成
+      let supplierId = item.supplier_id
+      if (!supplierId && item.supplier_name) {
+        if (supplierCache.has(item.supplier_name)) {
+          supplierId = supplierCache.get(item.supplier_name)!
+        } else {
+          const res = await fetch('/api/suppliers', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: item.supplier_name }),
+          })
+          if (res.ok) {
+            const s = await res.json()
+            supplierId = s.id
+            supplierCache.set(item.supplier_name, s.id)
+          }
+        }
+      }
+
+      // 2. 食材の確認・自動作成
+      let ingredient = ingredients.find(i => i.id === item.ingredient_id)
+        ?? ingredients.find(i => i.name === item.ingredient_name || i.name.includes(item.ingredient_name) || item.ingredient_name.includes(i.name))
+
+      const unitPrice = item.unit_price > 0 ? item.unit_price : (item.quantity > 0 ? item.price / item.quantity : item.price)
+      // 食材マスタの基準価格は常に1単位（重量系は100g）あたりの単価で保持する
+      const ref = toReferenceQuantity(item.unit, item.quantity, item.price)
+
+      if (!ingredient) {
+        const cat = categories.find(c => c.name === item.category_name) ?? categories.find(c => c.name === 'その他')
+        const res = await fetch('/api/ingredients', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: item.ingredient_name,
+            unit: item.unit,
+            category_id: cat?.id ?? null,
+            supplier_id: supplierId || null,
+            purchase_price: ref ? ref.price : item.price,
+            purchase_quantity: ref ? ref.quantity : item.quantity,
+          }),
+        })
+        if (res.ok) {
+          ingredient = await res.json()
+          setIngredients(prev => [...prev, ingredient as Ingredient])
+        }
+      }
+
+      // 3. 仕入履歴登録
       await fetch('/api/purchases', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           purchase_date: item.purchase_date,
-          supplier_id: item.supplier_id || null,
-          ingredient_id: ing?.id ?? null,
+          supplier_id: supplierId || null,
+          ingredient_id: ingredient?.id ?? null,
           ingredient_name: item.ingredient_name + (item.spec ? ` (${item.spec})` : ''),
           quantity: item.quantity,
           unit: item.unit,
           price: item.price,
+          unit_price: unitPrice,
           notes: item.spec || null,
         }),
       })
+
+      // 4. 食材マスタの価格を最新に更新（同一食材の重複行は最新納品日のみ反映）
+      if (ingredient?.id && latestByName.get(item.ingredient_name) === item) {
+        await fetch(`/api/ingredients/${ingredient.id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            purchase_price: ref ? ref.price : item.price,
+            purchase_quantity: ref ? ref.quantity : item.quantity,
+            unit: item.unit,
+            supplier_id: supplierId || ingredient.supplier_id || null,
+          }),
+        })
+      }
     }
     setSaving(false)
     setShowCsv(false)
@@ -430,18 +413,24 @@ export default function PurchasesPage() {
     }))
   }
 
+  const filtered = purchases.filter(p =>
+    !search || normalizeForSearch(p.ingredient_name).includes(normalizeForSearch(search))
+  )
+
   return (
     <div className="p-6">
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-center justify-between mb-4">
         <h2 className="text-xl font-bold text-gray-900">仕入履歴・納品書</h2>
         <div className="flex gap-2">
+          {selectedIds.size > 0 && (
+            <button onClick={handleBulkDelete}
+              className="flex items-center gap-1.5 bg-red-600 text-white text-sm px-4 py-2 rounded-lg hover:bg-red-700 transition-colors">
+              <Trash2 size={15} /> 選択した{selectedIds.size}件を削除
+            </button>
+          )}
           <button onClick={() => { setShowCsv(true); setCsvStep('upload'); setCsvItems([]); setCsvError('') }}
             className="flex items-center gap-1.5 bg-purple-600 text-white text-sm px-4 py-2 rounded-lg hover:bg-purple-700 transition-colors">
             <FileSpreadsheet size={15} /> インフォマートCSV
-          </button>
-          <button onClick={() => { setShowOcr(true); setOcrStep('upload') }}
-            className="flex items-center gap-1.5 bg-green-600 text-white text-sm px-4 py-2 rounded-lg hover:bg-green-700 transition-colors">
-            <Upload size={15} /> 納品書を読み取る
           </button>
           <button onClick={() => { setForm(emptyForm); setShowForm(true) }}
             className="flex items-center gap-1.5 bg-blue-600 text-white text-sm px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors">
@@ -450,11 +439,26 @@ export default function PurchasesPage() {
         </div>
       </div>
 
+      {/* 検索 */}
+      <div className="relative max-w-xs mb-4">
+        <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+        <input
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          placeholder="商品名で検索"
+          className="w-full pl-8 pr-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+        />
+      </div>
+
       {/* 仕入履歴テーブル */}
       <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
         <table className="w-full text-sm">
           <thead className="bg-gray-50 border-b border-gray-200">
             <tr>
+              <th className="px-4 py-3 w-8">
+                <input type="checkbox" checked={filtered.length > 0 && selectedIds.size === filtered.length}
+                  onChange={toggleSelectAll} className="rounded border-gray-300 text-blue-600 focus:ring-blue-500" />
+              </th>
               <th className="text-left px-4 py-3 font-medium text-gray-600">日付</th>
               <th className="text-left px-4 py-3 font-medium text-gray-600">仕入先</th>
               <th className="text-left px-4 py-3 font-medium text-gray-600">食材名</th>
@@ -465,10 +469,14 @@ export default function PurchasesPage() {
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-50">
-            {purchases.length === 0 ? (
-              <tr><td colSpan={7} className="text-center py-8 text-gray-400">仕入履歴がありません</td></tr>
-            ) : purchases.map(p => (
+            {filtered.length === 0 ? (
+              <tr><td colSpan={8} className="text-center py-8 text-gray-400">仕入履歴がありません</td></tr>
+            ) : filtered.map(p => (
               <tr key={p.id} className="hover:bg-gray-50/50">
+                <td className="px-4 py-3">
+                  <input type="checkbox" checked={selectedIds.has(p.id)} onChange={() => toggleSelect(p.id)}
+                    className="rounded border-gray-300 text-blue-600 focus:ring-blue-500" />
+                </td>
                 <td className="px-4 py-3 text-gray-700">{p.purchase_date}</td>
                 <td className="px-4 py-3 text-gray-500">{p.supplier?.name ?? '-'}</td>
                 <td className="px-4 py-3 font-medium text-gray-900">
@@ -561,123 +569,6 @@ export default function PurchasesPage() {
         </div>
       )}
 
-      {/* OCRモーダル */}
-      {showOcr && (
-        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-2xl max-h-[90vh] flex flex-col">
-            <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
-              <h3 className="font-semibold text-gray-900">
-                {ocrStep === 'upload' ? '納品書を読み取る' : '読み取り結果を確認・登録'}
-              </h3>
-              <button onClick={() => { setShowOcr(false); setOcrStep('upload'); setOcrFile(null); setOcrItems([]) }}
-                className="p-1 text-gray-400 hover:text-gray-600">
-                <X size={18} />
-              </button>
-            </div>
-
-            {ocrStep === 'upload' ? (
-              <div className="px-6 py-6 space-y-4">
-                <div
-                  className="border-2 border-dashed border-gray-200 rounded-xl p-8 text-center cursor-pointer hover:border-blue-400 transition-colors"
-                  onClick={() => document.getElementById('ocr-file')?.click()}
-                  onDragOver={e => e.preventDefault()}
-                  onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) setOcrFile(f) }}
-                >
-                  <Upload size={24} className="mx-auto text-gray-300 mb-3" />
-                  <p className="text-sm text-gray-500">納品書の写真またはPDFをドラッグ＆ドロップ</p>
-                  <p className="text-xs text-gray-400 mt-1">または クリックしてファイルを選択</p>
-                  {ocrFile && (
-                    <div className="mt-3 flex items-center justify-center gap-2 text-sm text-green-600">
-                      <CheckCircle size={16} />
-                      {ocrFile.name}
-                    </div>
-                  )}
-                </div>
-                <input id="ocr-file" type="file" accept="image/*,application/pdf" className="hidden"
-                  onChange={e => setOcrFile(e.target.files?.[0] ?? null)} />
-                <button disabled={!ocrFile || ocrLoading} onClick={handleOcrUpload}
-                  className="w-full bg-green-600 text-white text-sm py-2.5 rounded-lg hover:bg-green-700 disabled:opacity-50 transition-colors">
-                  {ocrLoading ? ocrLoadingMsg : '読み取り開始'}
-                </button>
-              </div>
-            ) : (
-              <div className="flex-1 overflow-auto px-6 py-4 space-y-4">
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-xs font-medium text-gray-600 mb-1">仕入日</label>
-                    <input type="date" value={ocrDate} onChange={e => setOcrDate(e.target.value)}
-                      className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium text-gray-600 mb-1">仕入先</label>
-                    <select value={ocrSupplier} onChange={e => setOcrSupplier(e.target.value)}
-                      className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
-                      <option value="">未設定</option>
-                      {suppliers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-                    </select>
-                  </div>
-                </div>
-                <div className="text-xs font-medium text-gray-600 mb-2">読み取り品目（修正可）</div>
-                <div className="space-y-2">
-                  {ocrItems.map((item, idx) => (
-                    <div key={idx} className="grid grid-cols-5 gap-2 items-center p-3 bg-gray-50 rounded-lg">
-                      <input value={item.name} onChange={e => {
-                        const next = [...ocrItems]; next[idx] = { ...next[idx], name: e.target.value }; setOcrItems(next)
-                      }} className="col-span-2 border border-gray-200 rounded px-2 py-1 text-xs" />
-                      <input type="number" value={item.quantity} onChange={e => {
-                        const next = [...ocrItems]; next[idx] = { ...next[idx], quantity: parseFloat(e.target.value) }; setOcrItems(next)
-                      }} className="border border-gray-200 rounded px-2 py-1 text-xs" />
-                      <input value={item.unit} onChange={e => {
-                        const next = [...ocrItems]; next[idx] = { ...next[idx], unit: e.target.value }; setOcrItems(next)
-                      }} className="border border-gray-200 rounded px-2 py-1 text-xs" />
-                      <div className="flex items-center gap-1">
-                        <span className="text-xs text-gray-400">¥</span>
-                        <input type="number" value={item.price} onChange={e => {
-                          const next = [...ocrItems]; next[idx] = { ...next[idx], price: parseFloat(e.target.value) }; setOcrItems(next)
-                        }} className="w-full border border-gray-200 rounded px-2 py-1 text-xs" />
-                        <button onClick={() => setOcrItems(ocrItems.filter((_, i) => i !== idx))}
-                          className="text-gray-300 hover:text-red-400"><X size={12} /></button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-                {ocrItems.length === 0 && (
-                  <div className="py-4 space-y-3">
-                    {ocrError && (
-                      <div className="text-center text-xs text-red-500 p-3 bg-red-50 rounded">{ocrError}</div>
-                    )}
-                    {!ocrError && (
-                      <div className="text-center text-sm text-gray-400">品目が自動で読み取れませんでした。</div>
-                    )}
-                    {ocrRaw && (
-                      <details className="text-xs">
-                        <summary className="cursor-pointer text-blue-500 text-center">OCR読み取りテキストを確認する</summary>
-                        <pre className="mt-2 p-3 bg-gray-50 rounded text-gray-600 whitespace-pre-wrap break-all max-h-48 overflow-auto">{ocrRaw}</pre>
-                      </details>
-                    )}
-                    {!ocrRaw && !ocrError && (
-                      <div className="text-center text-xs text-red-400">テキストが読み取れませんでした。PDFの画質を確認してください。</div>
-                    )}
-                  </div>
-                )}
-              </div>
-            )}
-
-            {ocrStep === 'confirm' && (
-              <div className="px-6 py-4 border-t border-gray-100 flex gap-3">
-                <button onClick={() => setOcrStep('upload')} className="flex-1 border border-gray-200 text-gray-600 text-sm py-2 rounded-lg hover:bg-gray-50">
-                  戻る
-                </button>
-                <button onClick={handleOcrSave} disabled={saving || ocrItems.length === 0}
-                  className="flex-1 bg-blue-600 text-white text-sm py-2 rounded-lg hover:bg-blue-700 disabled:opacity-50">
-                  {saving ? '登録中...' : `${ocrItems.length}件を仕入履歴に登録`}
-                </button>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
       {/* インフォマートCSVモーダル */}
       {showCsv && (
         <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4">
@@ -686,10 +577,13 @@ export default function PurchasesPage() {
               <div>
                 <h3 className="font-semibold text-gray-900">インフォマートCSVを取り込む</h3>
                 {csvStep === 'confirm' && (
-                  <p className="text-xs text-gray-500 mt-0.5">{csvItems.length}件を読み込みました。内容を確認して登録してください。</p>
+                  <p className="text-xs text-gray-500 mt-0.5">
+                    {csvItems.length}件を読み込みました。内容を確認して登録してください。
+                    {csvExcludedCount > 0 && <span className="text-amber-600">（消耗品など{csvExcludedCount}件は対象外として除外しました）</span>}
+                  </p>
                 )}
               </div>
-              <button onClick={() => { setShowCsv(false); setCsvStep('upload'); setCsvItems([]) }}
+              <button onClick={() => { setShowCsv(false); setCsvStep('upload'); setCsvItems([]); setCsvExcludedCount(0) }}
                 className="p-1 text-gray-400 hover:text-gray-600">
                 <X size={18} />
               </button>
@@ -738,7 +632,8 @@ export default function PurchasesPage() {
                       <th className="text-right px-3 py-2 font-medium text-gray-600">数量</th>
                       <th className="text-left px-3 py-2 font-medium text-gray-600">単位</th>
                       <th className="text-right px-3 py-2 font-medium text-gray-600">金額</th>
-                      <th className="text-left px-3 py-2 font-medium text-gray-600">仕入先マッチ</th>
+                      <th className="text-left px-3 py-2 font-medium text-gray-600">仕入先</th>
+                      <th className="text-left px-3 py-2 font-medium text-gray-600">分類</th>
                       <th className="px-3 py-2"></th>
                     </tr>
                   </thead>
@@ -753,18 +648,48 @@ export default function PurchasesPage() {
                         <td className="px-3 py-2 text-gray-500">{item.supplier_name}</td>
                         <td className="px-3 py-2 font-medium text-gray-900">{item.ingredient_name}</td>
                         <td className="px-3 py-2 text-gray-400">{item.spec}</td>
-                        <td className="px-3 py-2 text-right">{item.quantity}</td>
-                        <td className="px-3 py-2">{item.unit}</td>
+                        <td className="px-3 py-2 text-right">
+                          <input type="number" min="0" step="0.001" value={item.quantity}
+                            onChange={e => {
+                              const quantity = parseFloat(e.target.value) || 0
+                              const n = [...csvItems]
+                              n[idx] = { ...n[idx], quantity, unit_price: quantity > 0 ? n[idx].price / quantity : 0 }
+                              setCsvItems(n)
+                            }}
+                            className="border border-gray-200 rounded px-1.5 py-1 text-xs w-20 text-right" />
+                        </td>
+                        <td className="px-3 py-2">
+                          <select value={item.unit}
+                            onChange={e => {
+                              const n = [...csvItems]
+                              n[idx] = { ...n[idx], unit: e.target.value }
+                              setCsvItems(n)
+                            }}
+                            className="border border-gray-200 rounded px-1.5 py-1 text-xs">
+                            {UNITS.includes(item.unit) ? null : <option value={item.unit}>{item.unit}</option>}
+                            {UNITS.map(u => <option key={u} value={u}>{u}</option>)}
+                          </select>
+                        </td>
                         <td className="px-3 py-2 text-right font-medium">¥{item.price.toLocaleString()}</td>
                         <td className="px-3 py-2">
                           <select
                             value={item.supplier_id}
                             onChange={e => { const n = [...csvItems]; n[idx] = { ...n[idx], supplier_id: e.target.value }; setCsvItems(n) }}
-                            className={`border rounded px-1.5 py-1 text-xs ${item.supplier_id ? 'border-green-300 bg-green-50' : 'border-gray-200'}`}
+                            className={`border rounded px-1.5 py-1 text-xs ${item.supplier_id ? 'border-green-300 bg-green-50' : 'border-amber-300 bg-amber-50'}`}
                           >
-                            <option value="">未設定</option>
+                            <option value="">{item.supplier_name ? `新規作成: ${item.supplier_name}` : '未設定'}</option>
                             {suppliers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
                           </select>
+                        </td>
+                        <td className="px-3 py-2">
+                          <select
+                            value={item.category_name}
+                            onChange={e => { const n = [...csvItems]; n[idx] = { ...n[idx], category_name: e.target.value }; setCsvItems(n) }}
+                            className={`border rounded px-1.5 py-1 text-xs ${item.ingredient_id ? 'border-green-300 bg-green-50' : 'border-gray-200'}`}
+                          >
+                            {categories.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
+                          </select>
+                          {!item.ingredient_id && <p className="text-[10px] text-amber-600 mt-0.5">新規食材</p>}
                         </td>
                         <td className="px-3 py-2">
                           <button onClick={() => setCsvItems(csvItems.filter((_, i) => i !== idx))}

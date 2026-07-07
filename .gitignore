@@ -39,3 +39,8 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# データバックアップ・作業用（Git対象外）
+backup/
+dev-server.log
+screenshot*.mjs

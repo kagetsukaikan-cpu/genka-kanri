@@ -4,7 +4,9 @@ import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { ArrowLeft, Plus, Trash2, Save } from 'lucide-react'
-import type { Ingredient } from '@/types'
+import type { Ingredient, IngredientCategory, Supplier } from '@/types'
+import { effectiveUnitPrice } from '@/lib/price'
+import IngredientCombobox from '@/components/IngredientCombobox'
 
 interface Row {
   ingredient_id: string
@@ -22,19 +24,16 @@ export default function NewMenuPage() {
   const [sellingPrice, setSellingPrice] = useState<number | ''>('')
   const [targetCostRate, setTargetCostRate] = useState(30)
   const [ingredients, setIngredients] = useState<Ingredient[]>([])
+  const [categories, setCategories] = useState<IngredientCategory[]>([])
+  const [suppliers, setSuppliers] = useState<Supplier[]>([])
   const [rows, setRows] = useState<Row[]>([])
   const [saving, setSaving] = useState(false)
 
   useEffect(() => {
     fetch('/api/ingredients').then(r => r.json()).then(d => setIngredients(Array.isArray(d) ? d : []))
+    fetch('/api/categories').then(r => r.json()).then(d => setCategories(Array.isArray(d) ? d : []))
+    fetch('/api/suppliers').then(r => r.json()).then(d => setSuppliers(Array.isArray(d) ? d : []))
   }, [])
-
-  const getUnitPrice = (ing: Ingredient) => {
-    if (!ing.purchase_price || !ing.purchase_quantity) return null
-    const base = ing.purchase_price / ing.purchase_quantity
-    const yr = (ing.yield_rate ?? 100) / 100
-    return yr > 0 ? base / yr : base
-  }
 
   const addRow = () => setRows(r => [...r, { ingredient_id: '', ingredient_name: '', quantity: 0, unit: 'g', unit_price: null, cost: null }])
 
@@ -47,7 +46,7 @@ export default function NewMenuPage() {
         if (ing) {
           updated.ingredient_name = ing.name
           updated.unit = ing.unit
-          updated.unit_price = getUnitPrice(ing)
+          updated.unit_price = effectiveUnitPrice(ing)
           updated.cost = updated.unit_price ? updated.unit_price * updated.quantity : null
         }
       }
@@ -67,7 +66,7 @@ export default function NewMenuPage() {
   const handleSave = async () => {
     if (!name || !sellingPrice) return alert('メニュー名と売価は必須です')
     setSaving(true)
-    await fetch('/api/menus', {
+    const res = await fetch('/api/menus', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -76,6 +75,11 @@ export default function NewMenuPage() {
       }),
     })
     setSaving(false)
+    if (!res.ok) {
+      const { error } = await res.json().catch(() => ({ error: null }))
+      alert(error ?? 'メニューの保存に失敗しました。')
+      return
+    }
     router.push('/menus')
   }
 
@@ -126,11 +130,13 @@ export default function NewMenuPage() {
             {rows.map((row, idx) => (
               <div key={idx} className="grid grid-cols-12 gap-2 items-center">
                 <div className="col-span-4">
-                  <select value={row.ingredient_id} onChange={e => updateRow(idx, 'ingredient_id', e.target.value)}
-                    className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500">
-                    <option value="">食材を選択</option>
-                    {ingredients.map(i => <option key={i.id} value={i.id}>{i.name}</option>)}
-                  </select>
+                  <IngredientCombobox
+                    ingredients={ingredients}
+                    categories={categories}
+                    suppliers={suppliers}
+                    value={row.ingredient_id}
+                    onSelect={id => updateRow(idx, 'ingredient_id', id)}
+                  />
                 </div>
                 <div className="col-span-2">
                   <input type="number" min="0" step="0.001" placeholder="数量" value={row.quantity || ''}
@@ -138,8 +144,13 @@ export default function NewMenuPage() {
                     className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500" />
                 </div>
                 <div className="col-span-1">
-                  <input value={row.unit} onChange={e => updateRow(idx, 'unit', e.target.value)}
-                    className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-xs" />
+                  {row.ingredient_id ? (
+                    // 食材を選んだら単位は食材マスタのものに自動固定（打ち間違い防止）
+                    <div className="px-2 py-1.5 text-xs text-gray-500 text-center bg-gray-50 rounded-lg border border-transparent">{row.unit}</div>
+                  ) : (
+                    <input value={row.unit} onChange={e => updateRow(idx, 'unit', e.target.value)}
+                      className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-xs" />
+                  )}
                 </div>
                 <div className="col-span-2">
                   <input type="number" min="0" step="0.0001" placeholder="単価" value={row.unit_price ?? ''}
@@ -173,6 +184,18 @@ export default function NewMenuPage() {
               <div className="text-lg font-bold text-gray-900">¥{((sellingPrice || 0) - totalCost).toFixed(0)}</div>
             </div>
           </div>
+          {/* 儲け判定を一言で（パソコンが苦手でも一目で分かるように） */}
+          {sellingPrice && sellingPrice > 0 && rows.length > 0 && (
+            ok ? (
+              <div className="mt-3 p-3 bg-green-50 rounded-lg text-sm text-green-700 font-medium">
+                ✓ 目標より低めで良好 — この一品で <span className="font-bold">¥{((sellingPrice || 0) - totalCost).toFixed(0)}</span> の利益
+              </div>
+            ) : (
+              <div className="mt-3 p-3 bg-red-50 rounded-lg text-sm text-red-600 font-medium">
+                ⚠ 目標原価率（{targetCostRate}%）より高めです — 売価や食材の量を見直しましょう
+              </div>
+            )
+          )}
         </div>
 
         <button onClick={handleSave} disabled={saving}

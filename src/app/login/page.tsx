@@ -38,7 +38,7 @@ function LoginForm() {
     <div className="min-h-screen bg-gray-50 flex items-center justify-center">
       <div className="bg-white rounded-2xl shadow-lg p-10 w-full max-w-sm">
         <div className="text-center mb-8">
-          <h1 className="text-2xl font-bold text-gray-900">原価管理システム</h1>
+          <h1 className="text-2xl font-bold text-gray-900">原価率管理システム</h1>
           <p className="text-sm text-gray-500 mt-1">料亭かぶと</p>
         </div>
 

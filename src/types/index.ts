@@ -34,6 +34,22 @@ export interface Ingredient {
   category?: IngredientCategory
   supplier?: Supplier
   latest_unit_price?: number | null
+  components?: IngredientComponent[]
+  is_group?: boolean
+}
+
+export interface IngredientComponent {
+  id?: string
+  parent_ingredient_id?: string
+  component_ingredient_id: string | null
+  component_name: string
+  quantity: number
+  unit: string
+  unit_price: number | null
+  cost: number | null
+  sort_order: number
+  // joined
+  component_ingredient?: Ingredient
 }
 
 export interface PurchaseHistory {
@@ -59,6 +75,7 @@ export interface Menu {
   id: string
   name: string
   category: string | null
+  image_url: string | null
   selling_price: number
   target_cost_rate: number
   notes: string | null

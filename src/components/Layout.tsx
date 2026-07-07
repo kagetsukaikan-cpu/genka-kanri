@@ -11,6 +11,7 @@ import {
   ChevronRight,
   LogOut,
 } from 'lucide-react'
+import Calculator from '@/components/Calculator'
 
 const navItems = [
   { href: '/', label: 'ダッシュボード', icon: LayoutDashboard },
@@ -36,7 +37,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     <div className="flex h-screen bg-gray-50">
       <aside className="w-56 bg-white border-r border-gray-200 flex flex-col">
         <div className="px-4 py-5 border-b border-gray-200">
-          <h1 className="text-base font-bold text-gray-900">原価管理システム</h1>
+          <h1 className="text-base font-bold text-gray-900">原価率管理システム</h1>
           <p className="text-xs text-gray-500 mt-0.5">料亭かぶと</p>
         </div>
         <nav className="flex-1 px-2 py-3 space-y-0.5">
@@ -72,6 +73,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
       <main className="flex-1 overflow-auto">
         {children}
       </main>
+      <Calculator />
     </div>
   )
 }

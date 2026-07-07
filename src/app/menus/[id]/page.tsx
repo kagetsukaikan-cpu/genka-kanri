@@ -4,7 +4,9 @@ import { use, useEffect, useState, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { ArrowLeft, Plus, Trash2, Save } from 'lucide-react'
-import type { Menu, Ingredient } from '@/types'
+import type { Menu, Ingredient, IngredientCategory, Supplier } from '@/types'
+import { effectiveUnitPrice } from '@/lib/price'
+import IngredientCombobox from '@/components/IngredientCombobox'
 
 interface MenuIngredientRow {
   id?: string
@@ -30,12 +32,20 @@ export default function MenuDetailPage({ params }: { params: Promise<{ id: strin
     notes: '',
   })
   const [ingredients, setIngredients] = useState<Ingredient[]>([])
+  const [categories, setCategories] = useState<IngredientCategory[]>([])
+  const [suppliers, setSuppliers] = useState<Supplier[]>([])
   const [rows, setRows] = useState<MenuIngredientRow[]>([])
   const [saving, setSaving] = useState(false)
 
   const load = useCallback(async () => {
-    const ings = await fetch('/api/ingredients').then(r => r.json())
+    const [ings, cats, sups] = await Promise.all([
+      fetch('/api/ingredients').then(r => r.json()),
+      fetch('/api/categories').then(r => r.json()),
+      fetch('/api/suppliers').then(r => r.json()),
+    ])
     setIngredients(Array.isArray(ings) ? ings : [])
+    setCategories(Array.isArray(cats) ? cats : [])
+    setSuppliers(Array.isArray(sups) ? sups : [])
 
     if (!isNew) {
       const data = await fetch(`/api/menus/${id}`).then(r => r.json())
@@ -54,14 +64,6 @@ export default function MenuDetailPage({ params }: { params: Promise<{ id: strin
   }, [id, isNew])
 
   useEffect(() => { load() }, [load])
-
-  const getEffectiveUnitPrice = (ing: Ingredient): number | null => {
-    const basePrice = ing.purchase_price && ing.purchase_quantity
-      ? ing.purchase_price / ing.purchase_quantity : null
-    if (!basePrice) return null
-    const yr = (ing.yield_rate ?? 100) / 100
-    return yr > 0 ? basePrice / yr : basePrice
-  }
 
   const addRow = () => {
     setRows(r => [...r, {
@@ -85,7 +87,7 @@ export default function MenuDetailPage({ params }: { params: Promise<{ id: strin
         if (ing) {
           updated.ingredient_name = ing.name
           updated.unit = ing.unit
-          const up = getEffectiveUnitPrice(ing)
+          const up = effectiveUnitPrice(ing)
           updated.unit_price = up
           updated.cost = up ? up * updated.quantity : null
         }
@@ -115,6 +117,7 @@ export default function MenuDetailPage({ params }: { params: Promise<{ id: strin
       selling_price: menu.selling_price,
       target_cost_rate: menu.target_cost_rate ?? 30,
       notes: menu.notes || null,
+      image_url: menu.image_url ?? null,
       menu_ingredients: rows.map((r, idx) => ({ ...r, sort_order: idx })),
     }
     const url = isNew ? '/api/menus' : `/api/menus/${id}`
@@ -146,6 +149,9 @@ export default function MenuDetailPage({ params }: { params: Promise<{ id: strin
         {/* 基本情報 */}
         <div className="bg-white rounded-xl border border-gray-200 p-5 space-y-4">
           <h3 className="font-medium text-gray-900 text-sm">基本情報</h3>
+          {menu.image_url && (
+            <img src={menu.image_url} alt={menu.name} className="w-full max-w-xs rounded-lg border border-gray-200" />
+          )}
           <div className="grid grid-cols-2 gap-4">
             <div className="col-span-2">
               <label className="block text-xs font-medium text-gray-600 mb-1">メニュー名 *</label>
@@ -191,12 +197,13 @@ export default function MenuDetailPage({ params }: { params: Promise<{ id: strin
             {rows.map((row, idx) => (
               <div key={idx} className="grid grid-cols-12 gap-2 items-center">
                 <div className="col-span-4">
-                  <select value={row.ingredient_id}
-                    onChange={e => updateRow(idx, 'ingredient_id', e.target.value)}
-                    className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500">
-                    <option value="">選択してください</option>
-                    {ingredients.map(i => <option key={i.id} value={i.id}>{i.name}</option>)}
-                  </select>
+                  <IngredientCombobox
+                    ingredients={ingredients}
+                    categories={categories}
+                    suppliers={suppliers}
+                    value={row.ingredient_id}
+                    onSelect={id => updateRow(idx, 'ingredient_id', id)}
+                  />
                 </div>
                 <div className="col-span-2">
                   <input type="number" min="0" step="0.001" placeholder="数量" value={row.quantity || ''}
@@ -204,8 +211,13 @@ export default function MenuDetailPage({ params }: { params: Promise<{ id: strin
                     className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500" />
                 </div>
                 <div className="col-span-1">
-                  <input value={row.unit} onChange={e => updateRow(idx, 'unit', e.target.value)}
-                    className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                  {row.ingredient_id ? (
+                    // 食材を選んだら単位は食材マスタのものに自動固定（打ち間違い防止）
+                    <div className="px-2 py-1.5 text-xs text-gray-500 text-center bg-gray-50 rounded-lg border border-transparent">{row.unit}</div>
+                  ) : (
+                    <input value={row.unit} onChange={e => updateRow(idx, 'unit', e.target.value)}
+                      className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                  )}
                 </div>
                 <div className="col-span-2">
                   <input type="number" min="0" step="0.0001" placeholder="単価" value={row.unit_price ?? ''}
@@ -229,7 +241,7 @@ export default function MenuDetailPage({ params }: { params: Promise<{ id: strin
               <span className="col-span-4">食材名</span>
               <span className="col-span-2">数量</span>
               <span className="col-span-1">単位</span>
-              <span className="col-span-2">単価(/単位)</span>
+              <span className="col-span-2">使うときの単価</span>
               <span className="col-span-2 text-right">原価</span>
             </div>
           )}
@@ -256,10 +268,17 @@ export default function MenuDetailPage({ params }: { params: Promise<{ id: strin
               </div>
             </div>
           </div>
-          {!ok && (
-            <div className="mt-3 p-2.5 bg-red-50 rounded-lg text-xs text-red-600">
-              目標原価率（{menu.target_cost_rate}%）を超えています
-            </div>
+          {/* 儲け判定を一言で（パソコンが苦手でも一目で分かるように） */}
+          {(menu.selling_price ?? 0) > 0 && rows.length > 0 && (
+            ok ? (
+              <div className="mt-3 p-3 bg-green-50 rounded-lg text-sm text-green-700 font-medium">
+                ✓ 目標より低めで良好 — この一品で <span className="font-bold">¥{((menu.selling_price ?? 0) - totalCost).toFixed(0)}</span> の利益
+              </div>
+            ) : (
+              <div className="mt-3 p-3 bg-red-50 rounded-lg text-sm text-red-600 font-medium">
+                ⚠ 目標原価率（{menu.target_cost_rate}%）より高めです — 売価や食材の量を見直しましょう
+              </div>
+            )
           )}
         </div>
 

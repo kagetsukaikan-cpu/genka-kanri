@@ -35,6 +35,20 @@ CREATE TABLE IF NOT EXISTS ingredients (
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- グループ食材の構成材料（例：酢飯 = 米 + 酢 + 砂糖 + 塩）
+CREATE TABLE IF NOT EXISTS ingredient_components (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  parent_ingredient_id UUID NOT NULL REFERENCES ingredients(id) ON DELETE CASCADE,
+  component_ingredient_id UUID REFERENCES ingredients(id),
+  component_name TEXT NOT NULL,         -- マスタ未登録でも入力できるよう
+  quantity NUMERIC(10,3) NOT NULL,
+  unit TEXT NOT NULL,
+  unit_price NUMERIC(10,4),             -- 使用時点の単価（スナップショット）
+  cost NUMERIC(10,2),                   -- 原価（自動計算）
+  sort_order INTEGER DEFAULT 0,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
 -- 仕入履歴
 CREATE TABLE IF NOT EXISTS purchase_history (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -57,6 +71,7 @@ CREATE TABLE IF NOT EXISTS menus (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   name TEXT NOT NULL,
   category TEXT,                        -- 料理カテゴリ（前菜・主菜など）
+  image_url TEXT,                       -- AI生成イメージ画像（data URL）
   selling_price NUMERIC(10,2) NOT NULL,
   target_cost_rate NUMERIC(5,2) DEFAULT 30, -- 目標原価率(%)
   notes TEXT,
@@ -90,6 +105,9 @@ INSERT INTO ingredient_categories (name, sort_order) VALUES
   ('仕込み品', 7),
   ('その他', 8)
 ON CONFLICT (name) DO NOTHING;
+
+-- 既存DBにmenusテーブルを作成済みの場合は以下を実行してカラムを追加
+-- ALTER TABLE menus ADD COLUMN IF NOT EXISTS image_url TEXT;
 
 -- 仕入履歴から食材マスタの単価を自動更新するビュー
 CREATE OR REPLACE VIEW ingredient_latest_price AS
