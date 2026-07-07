@@ -19,11 +19,16 @@ export function toReferenceQuantity(unit: string, totalQuantity: number, totalPr
   return { quantity: base, price: unitPrice * base }
 }
 
+// 金額表示：小数第2位まで見せつつ、末尾の余分な0は省く（例: 35.00→35、5.83→5.83、0.06→0.06）
+function fmtYen(n: number): string {
+  return n.toFixed(2).replace(/\.?0+$/, '')
+}
+
 // 表示用：重量系食材（g/kg）は100gあたりの単価に統一、それ以外は単位そのままの単価
 export function formatUnitPrice(ing: Ingredient): string {
   const price = effectiveUnitPrice(ing)
   if (!price) return '-'
-  if (ing.unit === 'g') return `¥${(price * 100).toFixed(1)}/100g`
-  if (ing.unit === 'kg') return `¥${(price / 10).toFixed(1)}/100g`
-  return `¥${price.toFixed(2)}/${ing.unit}`
+  if (ing.unit === 'g') return `¥${fmtYen(price * 100)}/100g`
+  if (ing.unit === 'kg') return `¥${fmtYen(price / 10)}/100g`
+  return `¥${fmtYen(price)}/${ing.unit}`
 }
