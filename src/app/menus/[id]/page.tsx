@@ -117,13 +117,17 @@ export default function MenuDetailPage({ params }: { params: Promise<{ id: strin
       selling_price: menu.selling_price,
       target_cost_rate: menu.target_cost_rate ?? 30,
       notes: menu.notes || null,
-      image_url: menu.image_url ?? null,
       menu_ingredients: rows.map((r, idx) => ({ ...r, sort_order: idx })),
     }
     const url = isNew ? '/api/menus' : `/api/menus/${id}`
     const method = isNew ? 'POST' : 'PUT'
-    await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
+    const res = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
     setSaving(false)
+    if (!res.ok) {
+      const { error } = await res.json().catch(() => ({ error: null }))
+      alert(error ?? 'メニューの保存に失敗しました。')
+      return
+    }
     if (isNew) router.push('/menus')
     else load()
   }

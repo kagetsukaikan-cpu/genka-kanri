@@ -34,7 +34,8 @@ export async function GET(_req: NextRequest, { params }: Context) {
 export async function PUT(request: NextRequest, { params }: Context) {
   const { id } = await params
   const body = await request.json()
-  const { menu_ingredients, ...menuData } = body
+  // image_url 列はDBに無いため除外（AI画像機能は廃止済み）
+  const { menu_ingredients, image_url: _image_url, ...menuData } = body
 
   const { data: menu, error: menuError } = await supabase
     .from('menus')
