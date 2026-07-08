@@ -10,6 +10,19 @@ export function effectiveUnitPrice(ing: Ingredient): number | null {
   return yieldRate > 0 ? price / (yieldRate / 100) : price
 }
 
+// メニュー食材1行の原価を計算する。食材マスタにある行は「最新の実質単価（歩留り反映済み）」で
+// 再計算し、マスタに無い行は保存済みの単価/原価を使う。一覧・ダッシュボードでも常に最新の原価を出すため。
+export function computeRowCost(
+  mi: { ingredient_id?: string | null; quantity: number; unit_price?: number | null; cost?: number | null },
+  ingMap: Record<string, Ingredient>
+): number {
+  const ing = mi.ingredient_id ? ingMap[mi.ingredient_id] : undefined
+  const eup = ing ? effectiveUnitPrice(ing) : null
+  if (eup != null) return eup * (mi.quantity ?? 0)
+  if (mi.unit_price != null) return mi.unit_price * (mi.quantity ?? 0)
+  return mi.cost ?? 0
+}
+
 // 内容量・仕入価格を「1単位（重量系はg基準で100g）あたりの単価」に正規化する。
 // 食材マスタの基準価格はどの仕入れ方をしても比較しやすいよう、常に1単位/100gの単価で保持する。
 export function toReferenceQuantity(unit: string, totalQuantity: number, totalPrice: number): { quantity: number; price: number } | null {

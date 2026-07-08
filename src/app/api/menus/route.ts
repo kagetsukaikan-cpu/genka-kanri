@@ -1,24 +1,28 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
+import { computeRowCost } from '@/lib/price'
+import type { Ingredient } from '@/types'
 
 export async function GET() {
-  const { data: menus, error } = await supabase
-    .from('menus')
-    .select('*')
-    .eq('is_active', true)
-    .order('name')
+  // 各メニューの合計原価は「最新の実質単価（歩留り反映済み）」で常に計算する
+  const [{ data: menus, error }, { data: miData }, { data: ings }, { data: latest }] = await Promise.all([
+    supabase.from('menus').select('*').eq('is_active', true).order('name'),
+    supabase.from('menu_ingredients').select('menu_id, ingredient_id, quantity, unit_price, cost'),
+    supabase.from('ingredients').select('id, purchase_price, purchase_quantity, yield_rate'),
+    supabase.from('ingredient_latest_price').select('ingredient_id, unit_price'),
+  ])
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
-  // 各メニューの合計原価を計算
-  const { data: miData } = await supabase
-    .from('menu_ingredients')
-    .select('menu_id, cost')
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const priceMap = Object.fromEntries((latest ?? []).map((p: any) => [p.ingredient_id, p.unit_price]))
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const ingMap = Object.fromEntries((ings ?? []).map((i: any) => [i.id, { ...i, latest_unit_price: priceMap[i.id] ?? null }])) as Record<string, Ingredient>
 
   const costMap: Record<string, number> = {}
   for (const mi of miData ?? []) {
     if (!costMap[mi.menu_id]) costMap[mi.menu_id] = 0
-    costMap[mi.menu_id] += mi.cost ?? 0
+    costMap[mi.menu_id] += computeRowCost(mi, ingMap)
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

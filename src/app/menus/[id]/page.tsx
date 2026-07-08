@@ -50,16 +50,24 @@ export default function MenuDetailPage({ params }: { params: Promise<{ id: strin
     if (!isNew) {
       const data = await fetch(`/api/menus/${id}`).then(r => r.json())
       setMenu(data)
-      setRows((data.menu_ingredients ?? []).map((mi: MenuIngredientRow) => ({
-        id: mi.id,
-        ingredient_id: mi.ingredient_id ?? '',
-        ingredient_name: mi.ingredient_name,
-        quantity: mi.quantity,
-        unit: mi.unit,
-        unit_price: mi.unit_price,
-        cost: mi.cost,
-        sort_order: mi.sort_order,
-      })))
+      // 食材マスタの最新単価・使える割合（歩留り）を常に反映する（開くだけで自動更新）
+      const ingList: Ingredient[] = Array.isArray(ings) ? ings : []
+      setRows((data.menu_ingredients ?? []).map((mi: MenuIngredientRow) => {
+        const ing = ingList.find(i => i.id === mi.ingredient_id)
+        const eup = ing ? effectiveUnitPrice(ing) : null
+        const unit_price = eup ?? mi.unit_price
+        const unit = ing?.unit ?? mi.unit
+        return {
+          id: mi.id,
+          ingredient_id: mi.ingredient_id ?? '',
+          ingredient_name: mi.ingredient_name,
+          quantity: mi.quantity,
+          unit,
+          unit_price,
+          cost: unit_price != null ? unit_price * mi.quantity : mi.cost,
+          sort_order: mi.sort_order,
+        }
+      }))
     }
   }, [id, isNew])
 
